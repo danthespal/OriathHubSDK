@@ -89,9 +89,3 @@ The `Sdk/build-sdk.ps1` script does this automatically — it evicts the cached 
 ## `*Required` reads on hot paths
 
 `ReadMemoryRequired<T>` and `ReadMemoryArrayRequired<T>` throw `MemoryReadException` on failure. A torn frame during a parallel entity loop will cause an `AggregateException` that crashes the host. Reserve these methods for top-level sequential startup reads where failure genuinely means a stale offset — never call them inside a `Parallel.ForEach` or inside `DrawUI`.
-
----
-
-## Account risk
-
-OriathHub reads another process's memory, which carries account-risk under the game's Terms of Service. Plugins are read-only by design — never add anything that writes to or injects into the game process.

@@ -18,6 +18,12 @@ and pulls in the third-party libraries a plugin compiles against (`ImGuiNET` via
 At runtime the host already has these assemblies loaded and forces every plugin to share its
 copies, so none of them are copied into your plugin's output — you ship only your own DLL.
 
+## Account Risk
+
+Reading another process's memory for an online game can carry account risk under
+the game's Terms of Service. OriathHub is read-only by design: plugins must not
+write to game memory, inject code, or otherwise modify the game process.
+
 ## Quick start
 
 ```xml

@@ -51,7 +51,7 @@ public override void SaveSettings()
 
 OriathHub is driven by the [`Coroutine`](https://www.nuget.org/packages/Coroutine) scheduler ticked on the render thread. You can start your own coroutines that wait on host events — for example, to reset per-area caches when the player changes zones.
 
-Start a coroutine with `CoroutineHandler.Start`, keep the returned `ActiveCoroutine`, and **always cancel it in `OnDisable`**:
+Start a coroutine with `CoroutineHandler.Start`, add long-lived coroutines to `Core.CoroutinesRegistrar`, keep the returned `ActiveCoroutine`, and **always cancel it in `OnDisable`**:
 
 ```csharp
 using Coroutine;
@@ -63,6 +63,7 @@ public override void OnEnable(bool isGameOpened)
 {
     settings = JsonHelper.CreateOrLoadJsonFile<MyPluginSettings>(SettingsFile);
     areaChangeCoroutine = CoroutineHandler.Start(OnAreaChange(), "MyPlugin.AreaChange");
+    Core.CoroutinesRegistrar.Add(areaChangeCoroutine);
 }
 
 public override void OnDisable()
