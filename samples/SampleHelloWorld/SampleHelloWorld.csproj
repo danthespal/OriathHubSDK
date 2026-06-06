@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    SampleHelloWorld — a minimal reference plugin built the way an EXTERNAL author would build:
+    it references the OriathHub.Sdk NuGet package instead of the OriathHub source projects.
+
+    Prerequisite: the SDK package must exist in the local feed first. From the repo root run:
+        pwsh ./Sdk/build-sdk.ps1 -Configuration Debug
+    then build this project:
+        dotnet build Sdk/samples/SampleHelloWorld/SampleHelloWorld.csproj -c Debug
+
+    This project is intentionally NOT part of OriathHub.sln so that a plain
+    `dotnet build OriathHub.sln` stays source-only and never depends on a packed SDK.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <NoWarn>1701;1702;1591</NoWarn>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OriathHub.Sdk" Version="0.3.0" />
+  </ItemGroup>
+
+  <!--
+    Deploy only this plugin's own DLL into the host's Plugins/SampleHelloWorld/ folder.
+    OriathHub.dll, GameOffsets.dll and the shared third-party DLLs already live in the host
+    output directory, so they must not be copied here.
+  -->
+  <Target Name="CopyToHostPluginsDir" AfterTargets="Build">
+    <Copy SourceFiles="$(OutDir)$(TargetName)$(TargetExt)"
+          DestinationFolder="..\..\..\OriathHub\$(OutDir)Plugins\$(ProjectName)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

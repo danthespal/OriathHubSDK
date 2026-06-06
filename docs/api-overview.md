@@ -1,0 +1,902 @@
+# API reference
+
+Everything a plugin reads hangs off the static `OriathHub.Core` object. The host runs the memory-reading pipeline and exposes parsed results as managed objects — you read those; you do not write to game memory.
+
+---
+
+## Core entry points
+
+| Member | Type | Description |
+|---|---|---|
+| `Core.Process` | `GameProcess` | Process/window state and the raw memory-read facade. |
+| `Core.States` | `GameStates` | The state machine — `GameCurrentState`, `InGameStateObject`, `AreaLoading`. |
+| `Core.Overlay` | `OriathOverlay` | The ImGui overlay — texture loading and window area. |
+| `Core.OHSettings` | `State` | The host's own settings (treat as read-only from a plugin). |
+| `Core.CurrentAreaLoadedFiles` | `LoadedFiles` | All game files preloaded for the current area. |
+| `Core.GetVersion()` | `string` | OriathHub version string. |
+
+---
+
+## Game state guard
+
+Most data only exists while in-game. Always check before reading:
+
+```csharp
+using OriathHub.RemoteEnums;
+
+if (Core.States.GameCurrentState != GameStateTypes.InGameState)
+    return;
+
+var inGame = Core.States.InGameStateObject;
+var area   = inGame.CurrentAreaInstance;   // entities, player, terrain
+var world  = inGame.CurrentWorldInstance;  // world-to-screen matrix, area metadata
+var ui     = inGame.GameUi;               // in-game UI panels
+```
+
+The current area name is always available, even on the loading screen:
+
+```csharp
+string areaName = Core.States.AreaLoading.CurrentAreaName;
+```
+
+---
+
+## Area instance
+
+`inGame.CurrentAreaInstance` (`AreaInstance`) is the top-level source of in-game data.
+
+| Member | Type | Description |
+|---|---|---|
+| `Player` | `Entity` | The local player entity. |
+| `AwakeEntities` | `ConcurrentDictionary<EntityKey, Entity>` | All awake (interactive) entities — monsters, chests, players, NPCs, shrines. |
+| `EntitiesAddedThisFrame` | `IReadOnlyList<Entity>` | Entities that appeared this frame. Empty on zone-change frames. |
+| `EntitiesRemovedThisFrame` | `IReadOnlyList<Entity>` | Entities removed this frame (last-known state). Empty on zone-change frames. |
+| `ServerDataObject` | `ServerData` | Player progression and inventory pointers. |
+| `CurrentAreaLevel` | `int` | Monster level of the current area. |
+| `AreaHash` | `string` | Unique hex hash for this area instance. |
+| `NetworkBubbleEntityCount` | `int` | Total entity count inside the network bubble. |
+| `GridHeightData` | `float[][]` | Per-grid-cell terrain height, indexed `[y][x]`. |
+| `GridWalkableData` | `byte[]` | Raw walkability bitfield for the current area. |
+| `TgtTilesLocations` | `Dictionary<string, List<Vector2>>` | Grid positions of named map tiles (useful for detecting league-mechanic spawn tiles). |
+| `WorldToGridConvertor` | `float` | Divide a world-space coordinate by this to obtain a grid coordinate. |
+
+```csharp
+// Iterate every awake entity
+foreach (var (key, entity) in area.AwakeEntities)
+{
+    if (!entity.IsValid) continue;
+    // use entity
+}
+
+// React to entities appearing this frame
+foreach (var entity in area.EntitiesAddedThisFrame)
+    Log.Info($"appeared: {entity.Path}", Name);
+
+// React to entities leaving this frame
+foreach (var entity in area.EntitiesRemovedThisFrame)
+    Log.Info($"removed: {entity.Path}", Name);
+```
+
+> Both delta lists are empty on the zone-change frame — a transition is a bulk reset, not per-entity churn. Use `RemoteEvents.AreaChanged` to react to zone changes.
+
+---
+
+## World data
+
+`inGame.CurrentWorldInstance` (`WorldData`).
+
+| Member | Type | Description |
+|---|---|---|
+| `AreaDetails` | `WorldAreaDat` | Metadata row from WorldArea.dat for the current area. |
+| `WorldToScreen(worldPos)` | `Vector2` | Converts a `StdTuple3D<float>` world position to 2D screen coordinates. |
+| `WorldToScreen(worldPos, height)` | `Vector2` | Same, but with an explicit height override (e.g. `render.TerrainHeight`). |
+| `WorldToScreen(Vector2, height)` | `Vector2` | 2D world position overload. |
+
+**`WorldAreaDat` properties:**
+
+| Member | Type | Description |
+|---|---|---|
+| `Id` | `string` | Area identifier string (e.g. `"1_1_1"`). |
+| `Name` | `string` | Display name (e.g. `"The Twilight Strand"`). |
+| `Act` | `int` | Act number. |
+| `IsTown` | `bool` | True if the area is a town. |
+| `IsHideout` | `bool` | True if the area is a hideout. |
+| `HasWaypoint` | `bool` | True if the area has a waypoint. |
+| `IsBattleRoyale` | `bool` | True if the area is an Exile Royale area. |
+
+```csharp
+var details = world.AreaDetails;
+if (details.IsTown || details.IsHideout)
+    return; // skip overlay in safe zones
+
+// Convert world position to screen
+if (entity.TryGetComponent<Render>(out var render))
+{
+    var screen = world.WorldToScreen(render.WorldPosition);
+    ImGui.GetBackgroundDrawList().AddCircleFilled(screen, 5f, 0xFF00FF00);
+}
+```
+
+---
+
+## Entity
+
+### Properties
+
+| Member | Type | Description |
+|---|---|---|
+| `Path` | `string` | Asset path (e.g. `"Metadata/Monsters/Mercenaries/..."`). |
+| `Id` | `uint` | Unique ID within the current area instance. |
+| `IsValid` | `bool` | Whether the entity is present in game memory this frame. |
+| `EntityType` | `EntityTypes` | Broad classification. |
+| `EntitySubtype` | `EntitySubtypes` | Narrower classification. |
+| `EntityState` | `EntityStates` | Current lifecycle state. |
+| `Zones` | `NearbyZones` | Whether the entity is inside the player's inner/outer radius. |
+| `EntityCustomGroup` | `int` | User-defined group number for POI monsters and special objects. |
+| `ConsecutiveInvalidFrames` | `int` | How many frames in a row this entity has been invalid. |
+
+### EntityTypes
+
+| Value | Meaning |
+|---|---|
+| `Monster` | Hostile or neutral creature. |
+| `Player` | A player character (self or party member). |
+| `Chest` | Chest, strongbox, or league chest. |
+| `Shrine` | A shrine entity. |
+| `NPC` | Non-player character. |
+| `Renderable` | Positioned object with no other classification (opt-in, disabled by default). |
+| `DeliriumSpawner` | Delirium ShardPack spawner. |
+| `DeliriumBomb` | Delirium volatile bomb. |
+| `OtherImportantObjects` | Objects matching the `SpecialMiscObjPaths` host setting. |
+| `Item` | World-dropped item (classification partially implemented). |
+| `Unidentified` | Not yet classified. |
+
+### EntitySubtypes (selection)
+
+**Players:** `PlayerSelf`, `PlayerOther`  
+**Chests:** `Strongbox`, `ExpeditionChest`, `BreachChest`, `ChestWithMagicRarity`, `ChestWithRareRarity`  
+**Monsters:** `POIMonster`, `PinnacleBoss`  
+**NPCs:** `SpecialNPC`  
+**Items:** `WorldItem`
+
+### EntityStates
+
+| Value | Meaning |
+|---|---|
+| `None` | Normal, active. |
+| `Useless` | Dead, opened, or otherwise no longer relevant. |
+| `MonsterFriendly` | Monster is friendly to the player. |
+| `PinnacleBossHidden` | Pinnacle boss is in its hidden/invulnerable phase. |
+| `PlayerLeader` | This player entity is the designated party leader. |
+
+### Methods
+
+```csharp
+// Get a component — always use TryGetComponent; presence is not guaranteed
+if (entity.TryGetComponent<Life>(out var life)) { /* ... */ }
+
+// Grid-space distance between two entities
+int dist = entity.DistanceFrom(area.Player);  // in grid units
+
+// Check whether a monster was (or currently is) a specific subtype
+// Returns true even if the entity was later re-classified to POIMonster
+if (entity.IsOrWasMonsterSubType(EntitySubtypes.PinnacleBoss)) { /* ... */ }
+```
+
+---
+
+## Components
+
+Retrieve any component with `TryGetComponent<T>`. Components live in `OriathHub.RemoteObjects.Components`. The call is cheap — the entity caches components after the first access.
+
+```csharp
+using OriathHub.RemoteObjects.Components;
+
+if (entity.TryGetComponent<Life>(out var life))
+{
+    // life is valid here
+}
+```
+
+---
+
+### `Life`
+
+Vitals for any living entity — monsters, players, some NPCs.
+
+| Member | Type | Description |
+|---|---|---|
+| `IsAlive` | `bool` | `true` if current health > 0. |
+| `Health` | `VitalInfo` | Health resource. |
+| `Mana` | `VitalInfo` | Mana resource. |
+| `EnergyShield` | `VitalInfo` | Energy shield resource. |
+
+**`VitalInfo` properties:**
+
+| Member | Type | Description |
+|---|---|---|
+| `Current` | `int` | Current amount. |
+| `Total` | `int` | Maximum amount. |
+| `Unreserved` | `int` | Maximum minus reserved. |
+| `ReservedFlat` | `int` | Flat-reserved amount (e.g. from aura skills). |
+| `ReservedPercent` | `int` | Percent reservation × 100 (2023 → 20.23 %). |
+| `ReservedTotal` | `int` | Calculated total reservation. |
+| `Regeneration` | `float` | Regen rate (positive while regenerating). |
+| `CurrentInPercent()` | `int` | `Current` as a percentage of `Unreserved`. |
+| `ReservedInPercent()` | `int` | `ReservedTotal` as a percentage of `Total`. |
+
+```csharp
+if (entity.TryGetComponent<Life>(out var life) && life.IsAlive)
+{
+    int hpPct = life.Health.CurrentInPercent();   // 0–100
+    int maPct = life.Mana.CurrentInPercent();
+    int esPct = life.EnergyShield.CurrentInPercent();
+
+    bool lowLife = hpPct < 35;
+}
+```
+
+---
+
+### `Actor`
+
+Animation state and active skill data for monsters and players.
+
+| Member | Type | Description |
+|---|---|---|
+| `Animation` | `Animation` (enum) | Current animation (e.g. `Animation.Idle`, `Animation.Run`, `Animation.Attack1`). |
+| `ActiveSkills` | `Dictionary<string, ActiveSkillInfo>` | All known active skills, keyed by skill name. |
+| `IsSkillUsable` | `HashSet<string>` | Names of skills currently off cooldown and usable. |
+| `DeployedEntities` | `int[256]` | Per-type count of deployed objects (totems, mines, minions …). Index is the deployed-object type ID. |
+
+**`ActiveSkillInfo` properties:**
+
+| Member | Type | Description |
+|---|---|---|
+| `ActiveSkillsDatId` | `uint` | Row ID in ActiveSkills.dat. |
+| `TotalCooldownTimeInMs` | `int` | Cooldown duration in milliseconds. |
+| `TotalUses` | `int` | Total number of times the skill has been used this session. |
+| `UnknownIdAndEquipmentInfo` | `uint` | Packed gem socket / equipment info. |
+| `GrantedEffectsDatRow` | `IntPtr` | Pointer to the GrantedEffects.dat row. |
+
+```csharp
+if (entity.TryGetComponent<Actor>(out var actor))
+{
+    bool isAttacking = actor.Animation == Animation.Attack1;
+
+    if (actor.ActiveSkills.TryGetValue("Ice Strike", out var skill))
+        Log.Info($"cooldown: {skill.TotalCooldownTimeInMs} ms", Name);
+
+    bool canUse = actor.IsSkillUsable.Contains("Ice Strike");
+}
+```
+
+---
+
+### `Buffs`
+
+Active buffs and debuffs on an entity.
+
+| Member | Type | Description |
+|---|---|---|
+| `StatusEffects` | `ConcurrentDictionary<string, StatusEffectInfo>` | All active effects, keyed by buff name. |
+| `FlaskActive` | `bool[5]` | Whether each flask slot (0–4) is currently active. Only meaningful on the local player entity. |
+
+**`StatusEffectInfo` properties:**
+
+| Member | Type | Description |
+|---|---|---|
+| `TotalTime` | `float` | Full duration in seconds (`float.MaxValue` for permanent effects). |
+| `TimeLeft` | `float` | Remaining time in seconds. |
+| `Charges` | `short` | Stack count. |
+| `SourceEntityId` | `uint` | ID of the entity that applied the effect. |
+| `FlaskSlot` | `short` | Source flask slot (0–4); -1 if not from a flask. |
+| `Effectiveness` | `short` | Raw effectiveness modifier (display value = 100 + this). |
+
+```csharp
+if (entity.TryGetComponent<Buffs>(out var buffs))
+{
+    // Check for a specific debuff
+    if (buffs.StatusEffects.TryGetValue("ignited", out var burn))
+        Log.Info($"burning, {burn.TimeLeft:0.0}s left", Name);
+
+    // Check the player's flask slots (local player only)
+    bool flask1Active = buffs.FlaskActive[0];
+    bool flask2Active = buffs.FlaskActive[1];
+}
+```
+
+---
+
+### `Render`
+
+World-space and grid-space position.
+
+| Member | Type | Description |
+|---|---|---|
+| `WorldPosition` | `StdTuple3D<float>` | 3D world position (X, Y, Z). Z points toward the entity's healthbar. Pass directly to `WorldToScreen`. |
+| `GridPosition` | `StdTuple3D<float>` | 2D grid (map) position derived from world position. Z is always 0. |
+| `TerrainHeight` | `float` | Height of the terrain tile the entity stands on. |
+| `ModelBounds` | `StdTuple3D<float>` | Model bounding-box extents. |
+
+```csharp
+if (entity.TryGetComponent<Render>(out var render))
+{
+    // Draw text at the entity's screen position
+    var screen = world.WorldToScreen(render.WorldPosition);
+    ImGui.GetBackgroundDrawList().AddText(screen, 0xFFFFFFFF, entity.Path);
+
+    // Grid position — useful for minimap overlays
+    float gx = render.GridPosition.X;
+    float gy = render.GridPosition.Y;
+}
+```
+
+---
+
+### `Positioned`
+
+Faction and alignment.
+
+| Member | Type | Description |
+|---|---|---|
+| `IsFriendly` | `bool` | `true` if the entity is on the player's side. |
+| `Flags` | `byte` | Raw reaction flags byte. |
+
+```csharp
+if (entity.TryGetComponent<Positioned>(out var pos) && !pos.IsFriendly)
+{
+    // hostile
+}
+```
+
+---
+
+### `ObjectMagicProperties`
+
+Rarity and mod data for monsters and chests.
+
+| Member | Type | Description |
+|---|---|---|
+| `Rarity` | `Rarity` (enum) | `Normal`, `Magic`, `Rare`, `Unique`. |
+| `Mods` | `List<(string name, (float value0, float value1) values)>` | All mods with numeric ranges. Value is `float.NaN` if the mod has no numeric value. |
+| `ModNames` | `HashSet<string>` | All mod names for fast lookup. |
+| `ModStats` | `Dictionary<GameStats, int>` | Stats granted by the entity's mods. |
+
+```csharp
+if (entity.TryGetComponent<ObjectMagicProperties>(out var omp))
+{
+    bool isRare    = omp.Rarity == Rarity.Rare;
+    bool isBeyond  = omp.ModNames.Contains("MonsterConvertsOnDeath");
+    bool isEnraged = omp.ModNames.Contains("MonsterEnraged");
+}
+```
+
+---
+
+### `Mods`
+
+Like `ObjectMagicProperties` but for items (ground drops, inventory items). Mods are only read once when the address first changes, so this is safe to call on every frame.
+
+| Member | Type | Description |
+|---|---|---|
+| `Rarity` | `Rarity` | `Normal`, `Magic`, `Rare`, `Unique`. |
+| `ImplicitMods` | `List<(string, (float, float))>` | Implicit mods. |
+| `ExplicitMods` | `List<(string, (float, float))>` | Explicit (rolled) mods. |
+| `EnchantMods` | `List<(string, (float, float))>` | Enchantment mods. |
+| `HellscapeMods` | `List<(string, (float, float))>` | Crucible / hellscape mods. |
+
+```csharp
+if (entity.TryGetComponent<Mods>(out var mods))
+{
+    foreach (var (name, (v0, v1)) in mods.ExplicitMods)
+        Log.Info($"{name}: {v0}–{v1}", Name);
+}
+```
+
+---
+
+### `Stats`
+
+Numeric stat values, split by source.
+
+| Member | Type | Description |
+|---|---|---|
+| `StatsChangedByItems` | `Dictionary<GameStats, int>` | Stats from equipped items. |
+| `StatsChangedByBuffAndActions` | `Dictionary<GameStats, int>` | Stats from buffs and skills. |
+| `CurrentWeaponIndex` | `int` | Active weapon set (0 = weapon I, 1 = weapon II). |
+| `IsInShapeshiftedForm` | `bool` | `true` if the entity is shapeshifted. |
+
+`GameStats` is a large enum in `OriathHub.RemoteEnums`. Browse it in your IDE for the full list of stat IDs.
+
+```csharp
+if (entity.TryGetComponent<Stats>(out var stats))
+{
+    // Check whether the entity is dead (stat-driven classification)
+    if (stats.StatsChangedByBuffAndActions.TryGetValue(GameStats.is_dead, out var dead) && dead > 0)
+        return;
+
+    // Check active weapon set
+    bool dualWield = stats.CurrentWeaponIndex == 1;
+}
+```
+
+---
+
+### `Player`
+
+Player-specific data. Present only on player entities.
+
+| Member | Type | Description |
+|---|---|---|
+| `Name` | `string` | Character name. Updated only when the address first changes. |
+| `Level` | `int` | Character level. |
+| `Xp` | `int` | Current experience points. |
+
+```csharp
+if (area.Player.TryGetComponent<Player>(out var playerComp))
+{
+    ImGui.Text($"{playerComp.Name}  Lv.{playerComp.Level}");
+}
+```
+
+---
+
+### `Chest`
+
+State of a chest entity.
+
+| Member | Type | Description |
+|---|---|---|
+| `IsOpened` | `bool` | `true` if the chest has been opened. |
+| `IsStrongbox` | `bool` | `true` if this is a strongbox. |
+| `IsLabelVisible` | `bool` | `true` if the chest label is visible (breach/legion/normal chests). |
+
+```csharp
+if (entity.TryGetComponent<Chest>(out var chest) && !chest.IsOpened)
+{
+    // highlight unopened chest
+}
+```
+
+---
+
+### `Shrine`
+
+| Member | Type | Description |
+|---|---|---|
+| `IsUsed` | `bool` | `true` if the shrine has been activated. |
+
+```csharp
+if (entity.TryGetComponent<Shrine>(out var shrine) && !shrine.IsUsed)
+{
+    // draw shrine indicator
+}
+```
+
+---
+
+### `MinimapIcon`
+
+| Member | Type | Description |
+|---|---|---|
+| `IconName` | `string?` | Icon key from MinimapIcons.dat (e.g. `"RewardChestExpedition"`). `null` if not set. |
+
+```csharp
+if (entity.TryGetComponent<MinimapIcon>(out var icon) && icon.IconName != null)
+    Log.Info($"minimap icon: {icon.IconName}", Name);
+```
+
+---
+
+### `Targetable`
+
+| Member | Type | Description |
+|---|---|---|
+| `IsTargetable` | `bool` | `true` if the entity can currently be targeted by the player. Combines all internal flags. |
+
+```csharp
+if (entity.TryGetComponent<Targetable>(out var targetable) && targetable.IsTargetable)
+{
+    // entity is interactable
+}
+```
+
+---
+
+### `Transitionable`
+
+For doors, levers, and similar interactive objects.
+
+| Member | Type | Description |
+|---|---|---|
+| `CurrentState` | `int` | Transition state index (0 = closed/default, 1 = open; varies by object type). |
+
+```csharp
+if (entity.TryGetComponent<Transitionable>(out var door))
+    Log.Info($"door state: {door.CurrentState}", Name);
+```
+
+---
+
+### `TriggerableBlockage`
+
+| Member | Type | Description |
+|---|---|---|
+| `IsBlocked` | `bool` | `true` if the blockage is currently closed/active. |
+
+---
+
+### `Charges`
+
+Flask or skill charges.
+
+| Member | Type | Description |
+|---|---|---|
+| `Current` | `int` | Current number of charges. |
+| `PerUseCharge` | `int` | Charges consumed per use. |
+
+```csharp
+if (entity.TryGetComponent<Charges>(out var charges))
+{
+    int uses = charges.Current / charges.PerUseCharge;
+    ImGui.Text($"uses available: {uses}");
+}
+```
+
+---
+
+### `Stack`
+
+Item stack size.
+
+| Member | Type | Description |
+|---|---|---|
+| `Count` | `int` | Current stack size. |
+
+---
+
+### `Animated`
+
+Animated entity (projectile, summoned object). Only updated when the address first changes.
+
+| Member | Type | Description |
+|---|---|---|
+| `Path` | `string` | Asset path of the animated entity. |
+| `Id` | `uint` | ID of the animated entity. |
+
+---
+
+### `StateMachine`
+
+Multi-state objects such as bosses and interactive objects.
+
+| Member | Type | Description |
+|---|---|---|
+| `States` | `IReadOnlyList<StateMachineState>` | All states in the machine. |
+
+**`StateMachineState` properties:**
+
+| Member | Type | Description |
+|---|---|---|
+| `Name` | `string` | State name. |
+| `Value` | `long` | Current state value (0 often means inactive). |
+
+```csharp
+if (entity.TryGetComponent<StateMachine>(out var sm))
+{
+    foreach (var state in sm.States)
+    {
+        if (state.Value != 0)
+            Log.Info($"{state.Name} = {state.Value}", Name);
+    }
+}
+```
+
+---
+
+### `NPC` / `DiesAfterTime`
+
+Marker components with no public properties. Their presence drives entity classification:
+
+- `NPC` — the entity is an NPC.
+- `DiesAfterTime` — the entity is a temporary hostile (timed death).
+
+---
+
+## UI panels
+
+`inGame.GameUi` (`ImportantUiElements`) exposes the in-game UI elements tracked by the host.
+
+| Member | Type | Description |
+|---|---|---|
+| `IsAnyLargePanelOpen` | `bool` | `true` if any blocking panel is open: left/right side panel, passive skill tree, or world-travel map. Use this to hide world-space overlays while the player is in a menu. |
+| `IsPassiveSkillTreeOpen` | `bool` | `true` if the passive skill tree is visible. |
+| `LeftPanel` | `UiElementBase` | The currently open left panel (character, skills, …). Visible only while open. |
+| `RightPanel` | `UiElementBase` | The currently open right panel (inventory, vendor, stash, …). Visible only while open. |
+| `WorldMapPanel` | `UiElementBase` | The world-travel map screen. Visible only while open. |
+| `LargeMap` | `LargeMapUiElement` | The in-area large map. |
+| `MiniMap` | `MapUiElement` | The minimap. |
+| `ChatParent` | `ChatParentUiElement` | The chat UI element. |
+| `SkillTreeNodesUiElements` | `List<SkillTreeNodeUiElement>` | Passive tree nodes, populated only while the tree is open. Each exposes `SkillGraphId` (`uint`) and `Position` (`Vector2`). |
+
+**`UiElementBase` common members:**
+
+| Member | Type | Description |
+|---|---|---|
+| `IsVisible` | `bool` | Whether the element is currently shown. |
+| `Position` | `Vector2` | Screen position (top-left corner). |
+| `Size` | `Vector2` | Element size in pixels. |
+
+```csharp
+public override void DrawUI()
+{
+    if (Core.States.GameCurrentState != GameStateTypes.InGameState)
+        return;
+
+    // Hide world overlay while player is in any menu
+    if (Core.States.InGameStateObject.GameUi.IsAnyLargePanelOpen)
+        return;
+
+    // ... draw overlay ...
+}
+```
+
+> **Controller mode:** Side panels and the world-travel map report `IsVisible = false` in controller mode (gamepad UI offsets are not yet derived). `IsAnyLargePanelOpen` will not catch those panels on a controller.
+
+---
+
+## Coroutine events
+
+Subscribe in a coroutine started from `OnEnable`. Cancel it in `OnDisable`. These are the events a plugin can wait on (all in `OriathHub.CoroutineEvents`):
+
+| Event | Class | When it fires |
+|---|---|---|
+| `RemoteEvents.AreaChanged` | `RemoteEvents` | ~50 ms after zone-transition detection. Preloads may not be ready yet. |
+| `HybridEvents.PreloadsUpdated` | `HybridEvents` | After `Core.CurrentAreaLoadedFiles` finishes scanning the new area's files. |
+| `OriathEvents.OnMoved` | `OriathEvents` | Game window moved or resized. |
+| `OriathEvents.OnForegroundChanged` | `OriathEvents` | Game window gained or lost foreground. |
+| `OriathEvents.OnClose` | `OriathEvents` | Game process is closing. |
+
+> The host's per-frame pump (`OriathEvents.PerFrameDataUpdate` and friends) is `internal` and not reachable from a plugin. For per-frame work just use `DrawUI` — it runs every rendered frame, and the host's parsed data (entities, player, deltas) is already refreshed by the time it's called.
+
+```csharp
+using Coroutine;
+using OriathHub.CoroutineEvents;
+
+private ActiveCoroutine? areaCoroutine;
+
+public override void OnEnable(bool isGameOpened)
+    => areaCoroutine = CoroutineHandler.Start(OnAreaChange(), "MyPlugin.AreaChange");
+
+public override void OnDisable()
+{
+    areaCoroutine?.Cancel();
+    areaCoroutine = null;
+}
+
+private IEnumerator<Wait> OnAreaChange()
+{
+    while (true)
+    {
+        yield return new Wait(RemoteEvents.AreaChanged);
+        // clear per-area caches here
+    }
+}
+```
+
+---
+
+## Preloaded files
+
+`Core.CurrentAreaLoadedFiles.PathNames` is a `ConcurrentDictionary<string, int>` of all game files loaded for the current area. Populated after `HybridEvents.PreloadsUpdated` fires.
+
+```csharp
+bool isDelirium = Core.CurrentAreaLoadedFiles.PathNames
+    .ContainsKey("Metadata/Monsters/LeagueDelirium/DoodadDaemons/DoodadDaemon");
+```
+
+---
+
+## Drawing
+
+`DrawUI()` runs inside an ImGui frame — use `ImGuiNET` directly.
+
+```csharp
+// ImGui window
+ImGui.SetNextWindowBgAlpha(0.7f);
+if (ImGui.Begin("My Plugin"))
+{
+    ImGui.Text("Hello!");
+    ImGui.SliderFloat("value", ref myValue, 0f, 100f);
+}
+ImGui.End();
+
+// World-space overlay (background draw list)
+var draw = ImGui.GetBackgroundDrawList();
+draw.AddCircleFilled(screenPos, 6f, 0xFF00FF00);
+draw.AddText(screenPos, 0xFFFFFFFF, "Label");
+
+// Colors are packed ABGR: 0xAABBGGRR
+uint red   = 0xFF0000FF;
+uint green = 0xFF00FF00;
+uint white = 0xFFFFFFFF;
+```
+
+### Textures
+
+Texture loading is provided by the overlay itself (inherited from `ClickableTransparentOverlay`). `Core.Overlay` exposes three methods — each call after the first with the same key just returns the cached handle:
+
+| Method | Loads from | Out params |
+|---|---|---|
+| `AddOrGetImagePointer(string filePath, bool srgb, out IntPtr handle, out uint width, out uint height)` | a file on disk (the path doubles as the cache key) | handle + pixel dimensions |
+| `AddOrGetImagePointer(string name, Image<Rgba32> image, bool srgb, out IntPtr handle)` | an in-memory `SixLabors.ImageSharp` image (you supply the key) | handle only |
+| `RemoveImage(string key)` → `bool` | — | returns `true` if a cached texture was removed |
+
+Call these on the render thread (from `DrawUI`, `OnEnable`, or a coroutine). Free every texture you loaded when your plugin is disabled.
+
+```csharp
+// From disk — the path is both the source and the cache key.
+Core.Overlay.AddOrGetImagePointer("path/to/icon.png", false, out var ptr, out var w, out var h);
+ImGui.Image(ptr, new Vector2(w, h));
+
+// From memory — supply your own key, e.g. a procedurally generated image.
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+Image<Rgba32> image = /* build or decode an image */;
+Core.Overlay.AddOrGetImagePointer("my-generated-texture", image, false, out var genPtr);
+
+// Free in OnDisable, using the same key you loaded with:
+Core.Overlay.RemoveImage("path/to/icon.png");
+Core.Overlay.RemoveImage("my-generated-texture");
+```
+
+---
+
+## Logging
+
+Use `OriathHub.Utils.Log` — the console is absent in Release builds, but `Log` writes to `oriathhub.log` next to the executable.
+
+```csharp
+using OriathHub.Utils;
+
+Log.Info("plugin started", this.Name);
+Log.Warning("config not found, using defaults", this.Name);
+Log.Error($"exception: {ex}", this.Name);
+```
+
+---
+
+## Math helpers
+
+```csharp
+using OriathHub.Utils;
+
+float   v = MathHelper.Lerp(0f, 1f, 0.5f);           // 0.5
+Vector2 p = MathHelper.Lerp(vecA, vecB, t);           // interpolated Vector2
+```
+
+---
+
+## Input
+
+**Global hotkeys** — fire even while the game window is focused:
+
+```csharp
+using ClickableTransparentOverlay.Win32;
+
+if (Utils.IsKeyPressedAndNotTimeout(VK.F5))
+    settings.Show = !settings.Show;
+```
+
+**Overlay-focused input** — only when your ImGui window has focus:
+
+```csharp
+ImGui.IsKeyPressed(ImGuiKey.F5)
+ImGui.GetIO().MousePos
+```
+
+**Configurable hotkey** — store a `VK` in settings and render a picker in `DrawSettings`:
+
+```csharp
+ImGuiHelper.NonContinuousEnumComboBox("Hotkey", ref settings.Hotkey);
+```
+
+---
+
+## Settings helpers
+
+`OriathHub.Utils.ImGuiHelper` also provides:
+
+```csharp
+// Enum combo-box (continuous stepping — every frame while held)
+ImGuiHelper.EnumComboBox("Mode", ref settings.Mode);
+
+// Enum combo-box (non-continuous — fires once per key press)
+ImGuiHelper.NonContinuousEnumComboBox("Hotkey", ref settings.Hotkey);
+
+// Tooltip on the previous widget
+ImGuiHelper.ToolTip("This is what the setting does.");
+```
+
+`OriathHub.Utils.JsonHelper`:
+
+```csharp
+// Load or create settings (creates the file with defaults if absent)
+settings = JsonHelper.CreateOrLoadJsonFile<MySettings>(new FileInfo(path));
+
+// Save settings
+JsonHelper.SaveToFile(settings, new FileInfo(path));
+```
+
+---
+
+## Raw memory reads
+
+When the host wrappers do not expose what you need, read raw game memory through `Core.Process`. Define your own `[StructLayout]` struct with the relevant offsets — the host's internal layout structs are not visible to plugins.
+
+```csharp
+using System.Runtime.InteropServices;
+using GameOffsets.Natives;   // StdVector, StdWString, StdMap, StdList, etc.
+
+[StructLayout(LayoutKind.Explicit, Pack = 1)]
+struct MyCustomStruct
+{
+    [FieldOffset(0x10)] public StdVector Items;
+    [FieldOffset(0x28)] public StdWString Name;
+}
+
+// Every RemoteObject exposes a public Address property:
+IntPtr addr = someComponent.Address;
+
+// Error-safe read (prefer this on hot paths):
+if (Core.Process.ReadMemory<MyCustomStruct>(addr, out var raw))
+{
+    int[]  items = Core.Process.ReadStdVector<int>(raw.Items);
+    string name  = Core.Process.ReadStdWString(raw.Name);
+}
+// else: read failed (torn frame, bad address) — handle or skip
+```
+
+All read methods on `Core.Process`:
+
+| Method | Returns | Reads |
+|---|---|---|
+| `ReadMemory<T>(addr, out T value)` | `bool` | One unmanaged struct. `false` on failure. |
+| `ReadMemoryArray<T>(addr, count, out T[] value)` | `bool` | `count` contiguous structs. `false` on failure. |
+| `ReadMemoryRequired<T>(addr)` | `T` | One struct; throws `MemoryReadException` on failure. |
+| `ReadMemoryArrayRequired<T>(addr, count)` | `T[]` | `count` contiguous structs; throws on failure. |
+| `ReadStdVector<T>(stdVector)` | `T[]` | A `std::vector<T>`. |
+| `ReadStdList<T>(stdList)` | `List<T>` | A `std::list<T>`. |
+| `ReadStdMap<TKey,TValue>(stdMap, maxSizeAllowed, enableCounting, onEach)` | `int` | Walks a `std::map`; calls `onEach(key, value)` per node (return `false` to skip a node). Returns total node count. |
+| `ReadStdWString(stdWString)` | `string` | A `std::wstring` (UTF-16). |
+| `ReadUnicodeString(addr)` | `string` | Null-terminated UTF-16 string at a raw address. |
+
+**Error-safe vs fast-fail:**
+
+- `ReadMemory`/`ReadMemoryArray` return `false` and write `default`/empty on failure — they never log or throw. Use them everywhere except top-level startup reads.
+- `*Required` variants throw `MemoryReadException`. Reserve them for one-shot sequential reads where failure indicates a real bug (e.g. a stale offset after a game patch). **Never use them on a hot path or inside a parallel loop** — a torn frame will throw, and in `Parallel.*` it becomes an `AggregateException` that crashes the host.
+- `ReadStd*` container helpers always return empty on a bad address rather than throwing.
+
+---
+
+## Plugin metadata
+
+```csharp
+public override string Name        => "My Plugin";        // required
+public override string Description => "Does X.";          // required
+public override string Author      => "YourName";         // optional
+public override string Version     => "1.2.3";            // optional
+
+// Path to the plugin's deployment folder — build config/asset paths from this:
+var configPath  = Path.Combine(DllDirectory, "config",   "settings.json");
+var texturePath = Path.Combine(DllDirectory, "textures", "icon.png");
+```
+
+---
+
+## Discovering the full surface
+
+Because the SDK ships `OriathHub.xml` and `GameOffsets.xml`, your IDE shows XML docs and full IntelliSense over all `OriathHub.*` namespaces and the public `GameOffsets.Natives.*` types. Browsing `OriathHub.RemoteObjects.*` and `OriathHub.RemoteObjects.Components.*` in your editor is the fastest way to explore what data is available.
+
+The SDK ships a stripped, `Natives`-only `GameOffsets`, so the `GameOffsets.Objects.*` layout structs are not present in the package at all — access game data through the host wrappers instead, and define your own `[StructLayout]` structs for any raw reads.
