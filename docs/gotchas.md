@@ -2,102 +2,113 @@
 
 Common mistakes that bite plugin authors.
 
----
-
 ## Shared assemblies
 
-The host loads each plugin into a collectible `PluginAssemblyLoadContext` that forwards `OriathHub` and `GameOffsets` to the host's already-loaded copies. A `Core.States` reference in your plugin is the same object the host uses.
+The host loads each plugin into a collectible `PluginAssemblyLoadContext`. The loader forwards `OriathHub` and `GameOffsets` to the host's already-loaded copies, so a `Core.States` reference in your plugin is the same object the host uses.
 
-**Consequences:**
+Consequences:
 
-- Never ship `OriathHub.dll` or `GameOffsets.dll` next to your plugin DLL. The SDK references them as compile-time-only (`ref/`) assemblies, so a default build will not copy them — keep it that way.
-- The shared third-party libraries (`ImGuiNET`, `ClickableTransparentOverlay`, `Coroutine`, `Newtonsoft.Json`, `SixLabors.ImageSharp`) are already loaded by the host. Do not deploy them either.
+- Do not ship `OriathHub.dll` or `GameOffsets.dll` next to your plugin DLL. The SDK provides them as compile-time reference assemblies.
+- Do not copy the shared SDK dependencies (`ImGuiNET`, `ClickableTransparentOverlay`, `Coroutine`, `Newtonsoft.Json`, `SixLabors.ImageSharp`) unless you have a specific versioning problem and know how it will resolve at runtime.
+- Treat `Core.OHSettings` as host-owned. Read it when needed, but store plugin settings in your own file under `DllDirectory`.
 
----
+## SDK version stamps
 
-## Adding a new third-party dependency
+The SDK package stamps consuming plugin assemblies with `AssemblyMetadata("OriathHubSdkVersion", "...")`. `PluginManager` logs the plugin SDK version and the host SDK version when the plugin loads.
 
-If your plugin references a NuGet package the host does not already have, the host cannot resolve it at runtime. You must copy that DLL into your `Plugins/<Name>/` folder alongside your plugin DLL. The default `CopyToHostPluginsDir` target only copies your own DLL — extend it for any extra dependencies.
+If the major version differs, the loader logs a warning. The plugin may still load, but a major mismatch means the plugin was compiled against a potentially incompatible API surface. Rebuild against the SDK version that matches the host before investigating runtime bugs.
 
-Avoid native dependencies (unmanaged DLLs) when possible.
+## Adding a third-party dependency
 
----
+If your plugin references a NuGet package the host does not already ship, copy that dependency's runtime DLLs into your `Plugins/<Name>/` folder beside your plugin DLL. The default copy target usually copies only your own DLL.
+
+For package references, set this property so runtime assemblies are copied into your plugin output:
+
+```xml
+<EnableDynamicLoading>true</EnableDynamicLoading>
+```
+
+Then include those DLLs in your deployment target:
+
+```xml
+<ItemGroup>
+  <PluginFiles Include="$(OutDir)$(TargetName)$(TargetExt)" />
+  <PluginFiles Include="$(OutDir)System.Linq.Dynamic.Core.dll" />
+</ItemGroup>
+```
+
+Avoid unmanaged/native dependencies when possible. If you need one, test reload and startup carefully because native load/unload behavior is less forgiving.
 
 ## Discovery rules
 
-- The loader looks for `Plugins/<FolderName>/<FolderName>*.dll`. Your assembly name must **start with** the folder name, or the plugin will not be found.
-- There must be **exactly one** `sealed PluginBase` subclass per DLL. Zero or more than one causes the plugin to be skipped silently.
+- The loader scans the `Plugins` folder next to the running `OriathHub.exe`.
+- It searches each non-hidden subfolder for `Plugins/<FolderName>/<FolderName>*.dll`.
+- Your assembly name must start with the folder name, or the plugin will not be found.
+- A plugin DLL must contain exactly one `sealed PluginBase` subclass.
+- Discovery and instantiation failures are logged through `Log` and the DLL is skipped.
 
----
+## Release has no console
 
-## Release has no console — use `Log`
-
-OriathHub Release is a `WinExe` with no console window. Any `Console.WriteLine` diagnostics vanish. Use `OriathHub.Utils.Log` instead — it writes to `oriathhub.log` next to the executable and is visible in Release.
+OriathHub Release is a `WinExe` with no console window. `Console.WriteLine` diagnostics are not useful for plugin users. Use `OriathHub.Utils.Log`; it writes to `oriathhub.log` next to the executable.
 
 ```csharp
-Log.Info("loaded", this.Name);    // not Console.WriteLine
+Log.Info("loaded", Name);
+Log.Warning("config not found, using defaults", Name);
+Log.Error($"failed to load texture: {ex}", Name);
 ```
-
----
 
 ## `DrawUI` runs every rendered frame
 
-`DrawUI()` is called once per frame. Keep it cheap, bail out early when there is nothing to draw, and cache anything expensive outside the method. The same rule applies to coroutines — they run on the render thread and must never block or spin.
+`DrawUI()` is called once per rendered frame while the plugin is enabled. Keep it cheap:
 
----
+- Check `GameCurrentState` before reading in-game objects.
+- Return early when the game is in the background if your overlay does not need to draw.
+- Return early when `GameUi.IsAnyLargePanelOpen` if your world overlay would cover menus.
+- Cache expensive work outside `DrawUI` and update caches on events such as `RemoteEvents.AreaChanged`.
 
-## Releasing resources on disable / reload
+## Releasing resources on disable and reload
 
-A plugin is torn down whenever it is disabled or reloaded. **Nothing is cleaned up automatically.** Release everything you allocated in `OnEnable`:
+A plugin is torn down whenever it is disabled or reloaded. Nothing is cleaned up automatically.
 
-- **Coroutines:** keep the `ActiveCoroutine` returned by `CoroutineHandler.Start(...)` and call `.Cancel()` on it in `OnDisable`.
-- **Textures:** call `Core.Overlay.RemoveImage(path)` for each one you loaded.
-- **Anything else:** stop timers, close files, clear static caches.
+Release everything you allocated in `OnEnable`:
 
-A lingering coroutine or texture keeps your assembly referenced. The collectible load context cannot unload and **Reload from disk leaks the old copy** of your plugin in memory. Clean up everything and reloads stay clean.
+- Coroutines: keep the `ActiveCoroutine` returned by `CoroutineHandler.Start(...)` and call `.Cancel()` in `OnDisable`.
+- Textures: call `Core.Overlay.RemoveImage(key)` for each texture you loaded.
+- Timers/events: unsubscribe, stop timers, and clear static references.
+- Files/resources: close or dispose file handles and disposable objects.
 
----
+A lingering coroutine, texture, timer, or static reference can keep your assembly alive. The new DLL can still load, but the old copy stays in memory until the process exits.
 
 ## Reloading during development
 
-Expand a plugin in the Plugins tab and click **Reload from disk** to unload it and read the updated DLL from disk — no app restart required. The host loads plugin DLLs from an in-memory byte copy, so the file is never locked and you can rebuild while OriathHub is running.
+Expand a plugin in the Plugins tab and click **Reload from disk** to unload it and read the updated DLL without restarting OriathHub. The host loads plugin DLLs from an in-memory byte copy, so the file is not locked and you can rebuild while OriathHub is running.
 
-Tip: if you gate `DrawUI` entirely on `GameCurrentState == InGameState`, you will see nothing until you are in a loaded area. Draw at least a minimal unconditional window during development so you can confirm the plugin loaded successfully.
+During early development, draw a small unconditional debug window. If you gate all output on `GameCurrentState == InGameState`, the plugin may appear to do nothing until you are in a loaded area.
 
----
+## Updating to a newer SDK package
 
-## Re-packing the SDK during development
+Use the `.nupkg` file distributed with the OriathHub version you are targeting. If you receive a newer SDK package with the same package version during private testing, clear NuGet's cached copy before rebuilding your plugin:
 
-NuGet caches packages by version. If you re-`pack` the SDK without bumping `<Version>`, clear the cache so consumers pick up the new build:
-
-```sh
-rm -rf %USERPROFILE%\.nuget\packages\oriathhub.sdk
+```powershell
+Remove-Item -Recurse -Force "$env:USERPROFILE\.nuget\packages\oriathhub.sdk"
 ```
 
-Or bump the SDK `<Version>` in `Directory.Build.props` and update your plugin's `PackageReference`.
-
-The `Sdk/build-sdk.ps1` script does this automatically — it evicts the cached copy before packing.
-
----
+For normal releases, the SDK package version should change when the plugin-facing API changes, so clearing the cache should not be necessary.
 
 ## Entity delta lists are empty on zone-change frames
 
-`EntitiesAddedThisFrame` and `EntitiesRemovedThisFrame` are both empty on the frame a zone transition is detected, because the area dictionary is bulk-cleared rather than drained per-entity. Use `RemoteEvents.AreaChanged` to react to transitions.
+`EntitiesAddedThisFrame` and `EntitiesRemovedThisFrame` are both empty on the frame a zone transition is detected because the area dictionary is bulk-cleared rather than drained one entity at a time.
 
----
+Use `RemoteEvents.AreaChanged` to reset per-area caches.
 
 ## `*Required` reads on hot paths
 
-`ReadMemoryRequired<T>` and `ReadMemoryArrayRequired<T>` throw `MemoryReadException` on failure. A torn frame during a parallel entity loop will cause an `AggregateException` that crashes the host. Reserve these methods for top-level sequential startup reads where failure genuinely means a stale offset — never call them inside a `Parallel.ForEach` or inside `DrawUI`.
+`ReadMemoryRequired<T>` and `ReadMemoryArrayRequired<T>` throw `MemoryReadException` on failure. A torn frame during a parallel entity loop can become an `AggregateException` and destabilize the host.
 
----
+Use `ReadMemory<T>` and `ReadMemoryArray<T>` in `DrawUI`, entity loops, coroutines, and other hot paths. Reserve required reads for one-shot startup checks where failure genuinely means an offset or layout is wrong.
 
 ## Skill tree nodes are a viewport list
 
-`Core.States.InGameStateObject.GameUi.SkillTreeNodesUiElements` contains the passive or atlas nodes the
-game is currently drawing in the visible tree viewport. It is not a complete list of every passive or
-atlas node, and it changes as the player pans, zooms, or switches between passive and atlas trees.
+`Core.States.InGameStateObject.GameUi.SkillTreeNodesUiElements` contains the passive or atlas nodes the game is currently drawing in the visible tree viewport. It is not a complete passive or atlas database, and it changes as the player pans, zooms, or switches tree views.
 
-The list is owned by the host. Enumerate it during `DrawUI`, but do not add, remove, or cache entries
-across frames. `SkillTreeNodeUiElement.Position` is the node center; use `node.Position - node.Size / 2f`
-when drawing a rectangle from top-left to bottom-right.
+Enumerate the list during `DrawUI`, but do not add, remove, or cache entries across frames. `SkillTreeNodeUiElement.Position` is the node center; use `node.Position - node.Size / 2f` when drawing a rectangle from top-left to bottom-right.

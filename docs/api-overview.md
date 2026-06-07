@@ -13,7 +13,7 @@ Everything a plugin reads hangs off the static `OriathHub.Core` object. The host
 | `Core.Overlay` | `OriathOverlay` | The ImGui overlay — texture loading and window area. |
 | `Core.OHSettings` | `State` | The host's own settings (treat as read-only from a plugin). |
 | `Core.CurrentAreaLoadedFiles` | `LoadedFiles` | All game files preloaded for the current area. |
-| `Core.CoroutinesRegistrar` | `List<ActiveCoroutine>` | Host-owned list for long-lived coroutines. Plugins can add coroutines here when they should be tracked with the host lifecycle, but should still keep their own handle and cancel it in `OnDisable`. |
+| `Core.CoroutinesRegistrar` | `List<ActiveCoroutine>` | Host-owned diagnostics list for long-lived coroutines. Plugins may add coroutines here when they should appear in host coroutine diagnostics, but they must still keep their own handle and cancel it in `OnDisable`. |
 | `Core.GetVersion()` | `string` | OriathHub version string. |
 
 ---
@@ -911,7 +911,6 @@ private ActiveCoroutine? areaCoroutine;
 public override void OnEnable(bool isGameOpened)
 {
     areaCoroutine = CoroutineHandler.Start(OnAreaChange(), "MyPlugin.AreaChange");
-    Core.CoroutinesRegistrar.Add(areaCoroutine);
 }
 
 public override void OnDisable()
