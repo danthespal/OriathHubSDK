@@ -734,15 +734,19 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 
 | Member | Type | Description |
 |---|---|---|
-| `IsAnyLargePanelOpen` | `bool` | `true` if any blocking panel is open: left/right side panel, passive skill tree, or world-travel map. Use this to hide world-space overlays while the player is in a menu. |
+| `IsAnyLargePanelOpen` | `bool` | `true` if any blocking panel is open: left/right side panel, skill tree, or world-travel map. Use this to hide world-space overlays while the player is in a menu. |
+| `IsSkillTreeOpen` | `bool` | `true` if a passive or atlas skill-tree graph view is visible. |
 | `IsPassiveSkillTreeOpen` | `bool` | `true` if the passive skill tree is visible. |
-| `LeftPanel` | `UiElementBase` | The currently open left panel (character, skills, …). Visible only while open. |
-| `RightPanel` | `UiElementBase` | The currently open right panel (inventory, vendor, stash, …). Visible only while open. |
+| `IsAtlasSkillTreeOpen` | `bool` | `true` if the atlas skill tree is visible. |
+| `IsAtlasMapOpen` | `bool` | `true` if the endgame atlas map screen is visible. |
+| `LeftPanel` | `UiElementBase` | The currently open left panel. Visible only while open. |
+| `RightPanel` | `UiElementBase` | The currently open right panel. Visible only while open. |
 | `WorldMapPanel` | `UiElementBase` | The world-travel map screen. Visible only while open. |
 | `LargeMap` | `LargeMapUiElement` | The in-area large map. |
 | `MiniMap` | `MapUiElement` | The minimap. |
 | `ChatParent` | `ChatParentUiElement` | The chat UI element. |
-| `SkillTreeNodesUiElements` | `List<SkillTreeNodeUiElement>` | Passive tree nodes, populated only while the tree is open. Each exposes `SkillGraphId` (`int`) and `Position` (`Vector2`). |
+| `SkillTreeNodesUiElements` | `List<SkillTreeNodeUiElement>` | Passive or atlas skill-tree nodes currently drawable by the game and intersecting the game window while the tree is open. This is the current viewport subset, not a full passive/atlas database. Each node exposes `SkillGraphId` (`int`) and `Position` (`Vector2`). |
+| `AtlasMapsNodesUiElements` | `List<AtlasMapsNodeUiElement>` | Atlas map node controls currently present on the endgame atlas map screen. Each node exposes UI-element basics plus map name/id, description, biome id, raw status flags, derived status state, completion, and current runnable state. |
 
 **`UiElementBase` common members:**
 
@@ -751,7 +755,7 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `IsVisible` | `bool` | Whether the element is currently shown. |
 | `Position` | `Vector2` | Screen position (top-left corner). |
 | `Size` | `Vector2` | Element size in pixels. |
-| `Scale` | `float` | Element scale factor from the UI position modifier. |
+| `Scale` | `float` | Cached UI scale-like value exposed for compatibility. Position/size calculations use `Position` and `Size`. |
 | `TotalChildrens` | `int` | Number of child UI elements. The spelling matches the public API. |
 | `TryGetParent(out parent)` | `bool` | Returns the cached parent element if one is available. During transitions this can return `false`. |
 | `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range. |
@@ -770,7 +774,41 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 |---|---|---|
 | `LargeMap.Center` | `Vector2` | Center point of the large map before shift/default-shift adjustments. |
 | `ChatParent.IsChatActive` | `bool` | `true` when the chat parent background alpha indicates the chat input is active. |
-| `SkillTreeNodeUiElement.SkillGraphId` | `int` | Passive skill graph ID for a passive tree node control. |
+| `SkillTreeNodeUiElement.SkillGraphId` | `int` | Passive/atlas skill graph ID for a skill-tree node control. |
+| `SkillTreeNodeUiElement.Position` | `Vector2` | Visual node center position on screen. For rectangle drawing, subtract `node.Size / 2f` to get the top-left. |
+| `AtlasMapsNodeUiElement.MapAreaId` | `string` | `WorldAreas.dat` id for the map node, such as `MapVaalFactory`. |
+| `AtlasMapsNodeUiElement.MapName` | `string` | Display map name, such as `The Assembly`. |
+| `AtlasMapsNodeUiElement.Description` | `string` | Atlas node flavour/description text. |
+| `AtlasMapsNodeUiElement.AtlasNodeId` | `int` | Raw atlas node id/coordinate value from the UI node. |
+| `AtlasMapsNodeUiElement.EndgameMapBiomeId` | `byte` | `EndgameMapBiomes.dat` row id. |
+| `AtlasMapsNodeUiElement.StatusFlags` | `byte` | Raw packed node status flags. The low two bits encode `StatusState`; keep the full byte available when validating higher-bit semantics. |
+| `AtlasMapsNodeUiElement.StatusState` | `byte` | Derived low two-bit node state. Known live states: `0` unavailable, `1` runnable, `3` completed. State `2` exists in memory but its gameplay meaning is not confirmed yet. |
+| `AtlasMapsNodeUiElement.NodeIndex` | `int` | Index inside the current atlas map node collection. |
+| `AtlasMapsNodeUiElement.IsCompleted` | `bool` | `true` when `StatusState == 3`. |
+| `AtlasMapsNodeUiElement.CanRun` | `bool` | `true` when `StatusState == 1`. |
+
+`EndgameMapBiomeId` maps to the `_rid` field in `EndgameMapBiomes.dat`:
+
+| `_rid` | `Id` | `Name` |
+|---:|---|---|
+| `0` | `Water` | `Water` |
+| `1` | `Mountain` | `Mountain` |
+| `2` | `Grass` | `Grass` |
+| `3` | `Forest` | `Forest` |
+| `4` | `Swamp` | `Swamp` |
+| `5` | `Desert` | `Desert` |
+| `6` | `EzomyteCity` | `Ezomyte City` |
+| `7` | `FaridunCity` | `Faridun City` |
+| `8` | `VaalCity` | `Vaal City` |
+| `9` | `BreachCity` | `Breach Stronghold` |
+| `10` | `Ocean` | `Ocean` |
+| `11` | `Island` | `Island` |
+| `12` | `OriathCity` | `Oriath` |
+
+Use `IsSkillTreeOpen` when a plugin only needs to know that either tree is open. Use
+`IsPassiveSkillTreeOpen` or `IsAtlasSkillTreeOpen` when passive and atlas behavior should differ.
+`SkillTreeNodesUiElements` is owned and refreshed by the host; enumerate it during `DrawUI`, but do not
+add or remove entries from the list.
 
 ```csharp
 public override void DrawUI()
@@ -816,17 +854,33 @@ if (minimap.IsVisible)
     ImGui.Text($"minimap zoom: {minimap.Zoom:0.00}");
 ```
 
-**Chat and passive tree elements:**
+**Chat and skill tree elements:**
 
 ```csharp
 var gameUi = Core.States.InGameStateObject.GameUi;
 if (gameUi.ChatParent.IsChatActive)
     return; // avoid drawing or handling hotkeys while typing
 
-if (gameUi.IsPassiveSkillTreeOpen)
+if (gameUi.IsSkillTreeOpen)
 {
     foreach (var node in gameUi.SkillTreeNodesUiElements)
+    {
         ImGui.GetForegroundDrawList().AddText(node.Position, 0xFFFFFFFF, $"{node.SkillGraphId}");
+    }
+}
+```
+
+If you want to draw a node bounds rectangle, remember that `SkillTreeNodeUiElement.Position` is the
+center point:
+
+```csharp
+if (gameUi.IsSkillTreeOpen)
+{
+    foreach (var node in gameUi.SkillTreeNodesUiElements)
+    {
+        var topLeft = node.Position - (node.Size / 2f);
+        ImGui.GetForegroundDrawList().AddRect(topLeft, topLeft + node.Size, 0xFFFFFFFF);
+    }
 }
 ```
 

@@ -89,3 +89,15 @@ The `Sdk/build-sdk.ps1` script does this automatically — it evicts the cached 
 ## `*Required` reads on hot paths
 
 `ReadMemoryRequired<T>` and `ReadMemoryArrayRequired<T>` throw `MemoryReadException` on failure. A torn frame during a parallel entity loop will cause an `AggregateException` that crashes the host. Reserve these methods for top-level sequential startup reads where failure genuinely means a stale offset — never call them inside a `Parallel.ForEach` or inside `DrawUI`.
+
+---
+
+## Skill tree nodes are a viewport list
+
+`Core.States.InGameStateObject.GameUi.SkillTreeNodesUiElements` contains the passive or atlas nodes the
+game is currently drawing in the visible tree viewport. It is not a complete list of every passive or
+atlas node, and it changes as the player pans, zooms, or switches between passive and atlas trees.
+
+The list is owned by the host. Enumerate it during `DrawUI`, but do not add, remove, or cache entries
+across frames. `SkillTreeNodeUiElement.Position` is the node center; use `node.Position - node.Size / 2f`
+when drawing a rectangle from top-left to bottom-right.
