@@ -747,6 +747,7 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `ChatParent` | `ChatParentUiElement` | The chat UI element. |
 | `SkillTreeNodesUiElements` | `List<SkillTreeNodeUiElement>` | Passive or atlas skill-tree nodes currently drawable by the game and intersecting the game window while the tree is open. This is the current viewport subset, not a full passive/atlas database. Each node exposes `SkillGraphId` (`int`) and `Position` (`Vector2`). |
 | `AtlasMapsNodesUiElements` | `List<AtlasMapsNodeUiElement>` | Atlas map node controls currently present on the endgame atlas map screen. Each node exposes UI-element basics plus map name/id, description, biome id, raw status flags, derived status state, completion, and current runnable state. |
+| `AtlasMapConnections` | `IReadOnlyList<AtlasMapNodeConnection>` | Connections (edges) between revealed atlas map nodes on the endgame atlas map. Each entry exposes `From` and `To` (`AtlasMapsNodeUiElement`); draw a routing line between `From.Position` and `To.Position`. Edges are deduplicated (one per undirected pair) and only include endpoints that have an on-screen control — connections involving fogged/unrevealed nodes are omitted. Owned and refreshed by the host; enumerate during `DrawUI`, do not mutate or cache across frames. |
 
 **`UiElementBase` common members:**
 

@@ -13,9 +13,33 @@ Every plugin derives from `OriathHub.Plugin.PluginBase`. The host (`PluginManage
 | `DllDirectory` | Set once before `OnEnable` | Absolute path to the folder containing your plugin DLL. Build config and asset paths from this value. Do not set it yourself. |
 | `OnEnable(bool isGameOpened)` | When the plugin is switched on, and at startup if it was enabled last session | Load settings, start coroutines, load textures, and initialize plugin state. |
 | `OnDisable()` | When the plugin is switched off or reloaded | Cancel coroutines, free textures, stop timers, close files, and clear static references. |
-| `DrawSettings()` | Each frame while the Settings window shows your plugin | Render ImGui controls bound to your settings fields. |
+| `DrawSettings()` | Each frame while the Settings tab is active | Render the everyday ImGui controls for your plugin — the settings users interact with most. |
+| `DrawAdvancedSettings()` | Each frame while the Advanced tab is active | Optional (`virtual`, default empty). Override to expose power-user or technical controls in a separate tab. The Advanced tab is hidden automatically when not overridden. |
 | `DrawUI()` | Every rendered frame while enabled | Draw overlays and plugin windows. Keep it cheap and bail out early when there is nothing to draw. |
 | `SaveSettings()` | Periodically and on clean shutdown, only while enabled | Persist settings to disk. |
+
+## Settings tabs
+
+The host's plugin detail pane always shows three tabs: **Settings**, **Advanced**, and **About**.
+
+- **Settings** — calls `DrawSettings()` every frame. Put the controls users touch regularly here.
+- **Advanced** — calls `DrawAdvancedSettings()` every frame, but **the tab is hidden when you do not override the method**. Put technical knobs, calibration sliders, and power-user options here so the everyday settings view stays clean.
+- **About** — filled automatically by the host from `Author`, `Version`, `Description`, `DllDirectory`, and the SDK stamp. No code needed.
+
+```csharp
+public override void DrawSettings()
+{
+    // Common toggles — visible to everyone
+    ImGui.Checkbox("Show overlay", ref settings.ShowOverlay);
+}
+
+public override void DrawAdvancedSettings()
+{
+    // Advanced tab only appears because this method is overridden
+    ImGui.DragFloat("Scale multiplier", ref settings.ScaleMultiplier, 0.01f, 0.1f, 5f);
+    ImGui.Checkbox("Verbose logging", ref settings.VerboseLogging);
+}
+```
 
 ## Settings
 
