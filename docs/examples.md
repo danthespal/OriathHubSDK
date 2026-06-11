@@ -168,6 +168,28 @@ public override void DrawUI()
 }
 ```
 
+## Keep visual overlays visible while settings are focused
+
+Use `FocusHelper.IsGameOrOverlayForeground()` for visual overlays that users may tune live from OriathHub settings. This keeps the overlay visible when the game is behind the settings window. Use `Core.Process.Foreground` instead for hotkeys and automation logic that should only run while the game itself is focused.
+
+```csharp
+public override void DrawUI()
+{
+    if (!FocusHelper.IsGameOrOverlayForeground())
+    {
+        return;
+    }
+
+    if (Core.States.GameCurrentState != GameStateTypes.InGameState)
+    {
+        return;
+    }
+
+    var draw = ImGui.GetBackgroundDrawList();
+    draw.AddCircleFilled(new Vector2(200, 200), settings.MarkerRadius, ImGuiHelper.Color(0, 255, 0, 180));
+}
+```
+
 ## React to area changes
 
 Coroutines run on the render thread. Keep the returned `ActiveCoroutine`, cancel it in `OnDisable`, and avoid blocking work inside the coroutine.

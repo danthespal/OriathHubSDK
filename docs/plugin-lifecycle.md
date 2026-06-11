@@ -13,20 +13,30 @@ Every plugin derives from `OriathHub.Plugin.PluginBase`. The host (`PluginManage
 | `DllDirectory` | Set once before `OnEnable` | Absolute path to the folder containing your plugin DLL. Build config and asset paths from this value. Do not set it yourself. |
 | `OnEnable(bool isGameOpened)` | When the plugin is switched on, and at startup if it was enabled last session | Load settings, start coroutines, load textures, and initialize plugin state. |
 | `OnDisable()` | When the plugin is switched off or reloaded | Cancel coroutines, free textures, stop timers, close files, and clear static references. |
+| `DrawDashboard()` | Each frame while the Dashboard tab is active | Optional (`virtual`, default empty). Override to add a Dashboard tab, shown **first** in the plugin's detail view. The tab is hidden automatically when not overridden. |
 | `DrawSettings()` | Each frame while the Settings tab is active | Render the everyday ImGui controls for your plugin — the settings users interact with most. |
 | `DrawAdvancedSettings()` | Each frame while the Advanced tab is active | Optional (`virtual`, default empty). Override to expose power-user or technical controls in a separate tab. The Advanced tab is hidden automatically when not overridden. |
 | `DrawUI()` | Every rendered frame while enabled | Draw overlays and plugin windows. Keep it cheap and bail out early when there is nothing to draw. |
 | `SaveSettings()` | Periodically and on clean shutdown, only while enabled | Persist settings to disk. |
 
+For visual overlays, prefer `FocusHelper.IsGameOrOverlayForeground()` over `Core.Process.Foreground` when deciding whether to draw. That lets users focus the OriathHub settings window and still preview changes such as colors, sizes, and border thickness live over the game. Keep `Core.Process.Foreground` for hotkeys and automation logic that must only run while the game window itself is focused.
+
 ## Settings tabs
 
-The host's plugin detail pane always shows three tabs: **Settings**, **Advanced**, and **About**.
+The host's plugin detail pane shows **Settings** and **About** always, plus two optional tabs that only appear when you override their draw method: **Dashboard** (shown first) and **Advanced**. So a plugin overriding everything shows **Dashboard · Settings · Advanced · About**; a plugin overriding nothing optional shows just **Settings · About**.
 
+- **Dashboard** — calls `DrawDashboard()` every frame, but **the tab is hidden when you do not override the method**. When present it is the first tab. Use it for an at-a-glance status/overview view (live readouts, summaries, primary actions).
 - **Settings** — calls `DrawSettings()` every frame. Put the controls users touch regularly here.
 - **Advanced** — calls `DrawAdvancedSettings()` every frame, but **the tab is hidden when you do not override the method**. Put technical knobs, calibration sliders, and power-user options here so the everyday settings view stays clean.
 - **About** — filled automatically by the host from `Author`, `Version`, `Description`, `DllDirectory`, and the SDK stamp. No code needed.
 
 ```csharp
+public override void DrawDashboard()
+{
+    // Dashboard tab only appears because this method is overridden; it renders first.
+    ImGui.Text($"Tracked entities: {trackedCount}");
+}
+
 public override void DrawSettings()
 {
     // Common toggles — visible to everyone

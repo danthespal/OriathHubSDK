@@ -62,7 +62,8 @@ Log.Error($"failed to load texture: {ex}", Name);
 `DrawUI()` is called once per rendered frame while the plugin is enabled. Keep it cheap:
 
 - Check `GameCurrentState` before reading in-game objects.
-- Return early when the game is in the background if your overlay does not need to draw.
+- Return early when neither the game nor OriathHub overlay is focused if your visual overlay does not need to draw; use `FocusHelper.IsGameOrOverlayForeground()` for this.
+- Use `Core.Process.Foreground` instead for foreground-only hotkeys and automation gates that must only run while the game itself is focused.
 - Return early when `GameUi.IsAnyLargePanelOpen` if your world overlay would cover menus.
 - Cache expensive work outside `DrawUI` and update caches on events such as `RemoteEvents.AreaChanged`.
 

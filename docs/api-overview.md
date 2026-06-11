@@ -25,10 +25,10 @@ Everything a plugin reads hangs off the static `OriathHub.Core` object. The host
 | Member | Type | Description |
 |---|---|---|
 | `Pid` | `uint` | Game process ID, or `0` when the game is detached. |
-| `Foreground` | `bool` | `true` when the game window is the foreground window. |
+| `Foreground` | `bool` | `true` when the game window is the foreground window. Use this for gameplay/input/automation gates. |
 | `WindowArea` | `Rectangle` | Game client rectangle in monitor/screen coordinates. |
 
-Use these for window-relative UI decisions, foreground-only hotkeys, and diagnostics. Use the raw read methods in the [Raw memory reads](#raw-memory-reads) section for memory access.
+Use these for window-relative UI decisions, foreground-only hotkeys, and diagnostics. For visual overlays that should stay visible while the OriathHub settings window is focused, use `FocusHelper.IsGameOrOverlayForeground()` instead of `Core.Process.Foreground`. Use the raw read methods in the [Raw memory reads](#raw-memory-reads) section for memory access.
 
 ---
 
@@ -947,7 +947,12 @@ bool isDelirium = Core.CurrentAreaLoadedFiles.PathNames
 
 `DrawUI()` runs inside an ImGui frame — use `ImGuiNET` directly.
 
+Visual overlays should usually keep drawing while either the game window or the OriathHub overlay/settings window is focused, so users can preview setting changes live. Gate those overlays with `OriathHub.Utils.FocusHelper.IsGameOrOverlayForeground()`. Keep `Core.Process.Foreground` for gameplay hotkeys and automation logic that must only run while the game itself is focused.
+
 ```csharp
+if (!FocusHelper.IsGameOrOverlayForeground())
+    return;
+
 // ImGui window
 ImGui.SetNextWindowBgAlpha(0.7f);
 if (ImGui.Begin("My Plugin"))
@@ -1020,6 +1025,17 @@ using OriathHub.Utils;
 float   v = MathHelper.Lerp(0f, 1f, 0.5f);           // 0.5
 Vector2 p = MathHelper.Lerp(vecA, vecB, t);           // interpolated Vector2
 ```
+
+## Focus helpers
+
+```csharp
+using OriathHub.Utils;
+
+// True while either the game window or OriathHub overlay/settings window is focused.
+bool canPreviewVisualOverlay = FocusHelper.IsGameOrOverlayForeground();
+```
+
+Use `FocusHelper.IsGameOrOverlayForeground()` for visual drawing that should remain visible while users edit plugin settings. Use `Core.Process.Foreground` for foreground-only hotkeys, gameplay actions, and automation safety gates.
 
 ---
 
@@ -1145,6 +1161,27 @@ All read methods on `Core.Process`:
 - `ReadMemory`/`ReadMemoryArray` return `false` and write `default`/empty on failure — they never log or throw. Use them everywhere except top-level startup reads.
 - `*Required` variants throw `MemoryReadException`. Reserve them for one-shot sequential reads where failure indicates a real bug (e.g. a stale offset after a game patch). **Never use them on a hot path or inside a parallel loop** — a torn frame will throw, and in `Parallel.*` it becomes an `AggregateException` that crashes the host.
 - `ReadStd*` container helpers always return empty on a bad address rather than throwing.
+
+### Reading `.dat`/`.datc64` tables by name
+
+`DatFileReader.TryGetDatTable(path, out DatTable)` (namespace `OriathHub.RemoteObjects.FilesStructures`) resolves a loaded data file from the game's File Root by its in-game path and returns its row block.
+
+```csharp
+if (DatFileReader.TryGetDatTable("Data/Balance/EndgameMapBiomes.dat", out var table))
+{
+    int rowSize = 0xA0;                       // per-table; you supply it
+    for (int i = 0; i < table.RowCount(rowSize); i++)
+    {
+        IntPtr row = table.Row(i, rowSize);   // row i base address
+        Core.Process.ReadMemory<IntPtr>(row + 0x28, out var namePtr);
+        string name = Core.Process.ReadUnicodeString(namePtr);
+    }
+}
+```
+
+`DatTable` exposes `RowsBegin`/`RowsEnd`, `IsValid`, `ByteLength`, `RowCount(rowSize)`, `Row(index, rowSize)`. Row size and column offsets are table-specific — find them in `GameOffsets`. Returns `false` until the game is attached and the file is loaded.
+
+Convenience reader: `EndgameMapBiomes.TryGetNames(out IReadOnlyList<string> names)` returns biome display names indexed by biome id (the `AtlasMapsNodeUiElement.EndgameMapBiomeId`), cached.
 
 ---
 
