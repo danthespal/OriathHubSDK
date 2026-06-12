@@ -267,10 +267,13 @@ Global hotkeys are useful for plugin toggles. Avoid sending keys unless your plu
 
 ```csharp
 using ClickableTransparentOverlay.Win32;
+using OriathHub.Utils;
+
+private bool f5WasDown;
 
 public override void DrawUI()
 {
-    if (Core.Process.Foreground && Utils.IsKeyPressedAndNotTimeout(VK.F5))
+    if (Core.Process.Foreground && HotkeyHelper.IsPressedOnce(VK.F5, ref f5WasDown))
     {
         settings.ShowWindow = !settings.ShowWindow;
     }

@@ -338,7 +338,9 @@ Animation state and active skill data for monsters and players.
 
 | Member | Type | Description |
 |---|---|---|
-| `Animation` | `Animation` (enum) | Current animation (e.g. `Animation.Idle`, `Animation.Run`, `Animation.Attack1`). |
+| `AnimationId` | `int` | Current `Animation.dat` row id. This is the stable value to compare in plugins. |
+| `AnimationName` | `string` | Current animation name resolved from the game's loaded `Animation.dat`, with enum fallback when unavailable. |
+| `Animation` | `Animation` (enum) | `[Obsolete]` (emits a build warning) compatibility fallback for older plugins. Prefer `AnimationId` or `AnimationName`; the enum can become stale when `Animation.dat` rows shift. |
 | `ActiveSkills` | `Dictionary<string, ActiveSkillInfo>` | All known active skills, keyed by skill name. |
 | `IsSkillUsable` | `HashSet<string>` | Names of skills currently off cooldown and usable. |
 | `DeployedEntities` | `int[256]` | Per-type count of deployed objects (totems, mines, minions …). Index is the deployed-object type ID. |
@@ -361,7 +363,8 @@ Animation state and active skill data for monsters and players.
 ```csharp
 if (entity.TryGetComponent<Actor>(out var actor))
 {
-    bool isAttacking = actor.Animation == Animation.Attack1;
+    bool isRunning = actor.AnimationName == "Run";
+    int animationId = actor.AnimationId;
 
     if (actor.ActiveSkills.TryGetValue("Ice Strike", out var skill))
         Log.Info($"cooldown: {skill.TotalCooldownTimeInMs} ms", Name);
@@ -532,7 +535,7 @@ Player-specific data. Present only on player entities.
 |---|---|---|
 | `Name` | `string` | Character name. Updated only when the address first changes. |
 | `Level` | `int` | Character level. |
-| `Xp` | `int` | Current experience points. |
+| `Xp` | `uint` | Current experience points. |
 
 ```csharp
 if (area.Player.TryGetComponent<Player>(out var playerComp))
@@ -1045,10 +1048,15 @@ Use `FocusHelper.IsGameOrOverlayForeground()` for visual drawing that should rem
 
 ```csharp
 using ClickableTransparentOverlay.Win32;
+using OriathHub.Utils;
 
-if (Utils.IsKeyPressedAndNotTimeout(VK.F5))
+private bool f5WasDown;
+
+if (HotkeyHelper.IsPressedOnce(VK.F5, ref f5WasDown))
     settings.Show = !settings.Show;
 ```
+
+Use `HotkeyHelper.IsPressedOnce` for toggles and other one-shot actions. Use `HotkeyHelper.IsPressed` only for behavior that should intentionally continue while the key is held.
 
 **Sending key-up messages** — available through `OriathHub.Utils.MiscHelper`, but use it only for plugins whose explicit purpose is automation:
 
@@ -1181,7 +1189,10 @@ if (DatFileReader.TryGetDatTable("Data/Balance/EndgameMapBiomes.dat", out var ta
 
 `DatTable` exposes `RowsBegin`/`RowsEnd`, `IsValid`, `ByteLength`, `RowCount(rowSize)`, `Row(index, rowSize)`. Row size and column offsets are table-specific — find them in `GameOffsets`. Returns `false` until the game is attached and the file is loaded.
 
-Convenience reader: `EndgameMapBiomes.TryGetNames(out IReadOnlyList<string> names)` returns biome display names indexed by biome id (the `AtlasMapsNodeUiElement.EndgameMapBiomeId`), cached.
+Convenience readers:
+
+- `EndgameMapBiomes.TryGetNames(out IReadOnlyList<string> names)` returns biome display names indexed by biome id (the `AtlasMapsNodeUiElement.EndgameMapBiomeId`), cached.
+- `AnimationDat.TryGetName(int animationId, out string name)` returns an animation name from the loaded `Animation.dat` table. Prefer `Actor.AnimationName` unless you already have a raw animation id.
 
 ---
 

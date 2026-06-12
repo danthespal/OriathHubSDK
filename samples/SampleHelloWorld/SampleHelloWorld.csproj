@@ -22,7 +22,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.3.0" />
+    <PackageReference Include="OriathHub.Sdk" Version="0.3.7" />
   </ItemGroup>
 
   <!--
@@ -32,7 +32,7 @@
   -->
   <Target Name="CopyToHostPluginsDir" AfterTargets="Build">
     <Copy SourceFiles="$(OutDir)$(TargetName)$(TargetExt)"
-          DestinationFolder="..\..\..\OriathHub\$(OutDir)Plugins\$(ProjectName)"
+          DestinationFolder="..\..\..\OriathHub\bin\$(Configuration)\$(HostTfm)\Plugins\$(ProjectName)"
           SkipUnchangedFiles="true" />
   </Target>
 

@@ -24,6 +24,7 @@ namespace OriathHub.Plugins.SampleHelloWorld
     {
         private SampleHelloWorldSettings settings = new();
         private ActiveCoroutine? areaChangeCoroutine;
+        private bool toggleHotkeyDown;
 
         // Settings live next to the plugin DLL. DllDirectory is set by the loader before OnEnable.
         private FileInfo SettingsFile => new(Path.Combine(DllDirectory, "config", "settings.json"));
@@ -74,7 +75,7 @@ namespace OriathHub.Plugins.SampleHelloWorld
         /// <inheritdoc/>
         public override void DrawUI()
         {
-            if (Utils.IsKeyPressedAndNotTimeout(VK.F5))
+            if (HotkeyHelper.IsPressedOnce(VK.F5, ref this.toggleHotkeyDown))
             {
                 settings.Show = !settings.Show;
             }
