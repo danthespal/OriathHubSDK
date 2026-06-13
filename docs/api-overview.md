@@ -805,6 +805,7 @@ The protected constructor parses the element immediately and resolves its parent
 | `AtlasMapsNodeUiElement.NodeIndex` | `int` | Index inside the current atlas map node collection. |
 | `AtlasMapsNodeUiElement.IsCompleted` | `bool` | `true` when `StatusState == 3`. |
 | `AtlasMapsNodeUiElement.CanRun` | `bool` | `true` when `StatusState == 1`. |
+| `AtlasMapsNodeUiElement.Content` | `IReadOnlyList<string>` | Content-icon stems displayed on the node (e.g. `MapBoss`, `Breach`, `Expedition`), derived from its nested `AtlasIconContent*` image elements. Empty when the node has no rolled content. Cross-reference display names via `EndgameMapContent`. |
 
 `EndgameMapBiomeId` maps to the `_rid` field in `EndgameMapBiomes.dat`:
 
@@ -1289,6 +1290,7 @@ if (DatFileReader.TryGetDatTable("Data/Balance/EndgameMapBiomes.dat", out var ta
 Convenience readers:
 
 - `EndgameMapBiomes.TryGetNames(out IReadOnlyList<string> names)` returns biome display names indexed by biome id (the `AtlasMapsNodeUiElement.EndgameMapBiomeId`), cached.
+- `EndgameMapContent.TryGetNames(out IReadOnlyList<string> names)` returns map-content display names (Breach, Expedition, Powerful Map Boss, …) indexed by row id from `EndgameMapContent.dat`, cached. Use it to present a content picker or canonical names; per-node content is on `AtlasMapsNodeUiElement.Content`.
 - `AnimationDat.TryGetName(int animationId, out string name)` returns an animation name from the loaded `Animation.dat` table. Prefer `Actor.AnimationName` unless you already have a raw animation id.
 
 ---
