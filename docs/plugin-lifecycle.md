@@ -16,6 +16,7 @@ Every plugin derives from `OriathHub.Plugin.PluginBase`. The host (`PluginManage
 | `DrawDashboard()` | Each frame while the Dashboard tab is active | Optional (`virtual`, default empty). Override to add a Dashboard tab, shown **first** in the plugin's detail view. The tab is hidden automatically when not overridden. |
 | `DrawSettings()` | Each frame while the Settings tab is active | Render the everyday ImGui controls for your plugin — the settings users interact with most. |
 | `DrawAdvancedSettings()` | Each frame while the Advanced tab is active | Optional (`virtual`, default empty). Override to expose power-user or technical controls in a separate tab. The Advanced tab is hidden automatically when not overridden. |
+| `GetSearchableSettings()` | Each frame while the settings search box has text | Optional (`virtual`, default none). Override to make your options findable from the settings window's search box. See [Making settings searchable](#making-settings-searchable). |
 | `DrawUI()` | Every rendered frame while enabled | Draw overlays and plugin windows. Keep it cheap and bail out early when there is nothing to draw. |
 | `SaveSettings()` | Periodically and on clean shutdown, only while enabled | Persist settings to disk. |
 
@@ -50,6 +51,41 @@ public override void DrawAdvancedSettings()
     ImGui.Checkbox("Verbose logging", ref settings.VerboseLogging);
 }
 ```
+
+## Making settings searchable
+
+The settings window has a single search box above the content panel. When the user types in it,
+the host stops drawing your normal Settings/Advanced tabs and instead shows a flattened, filtered
+list of just the matching options. That list comes from `GetSearchableSettings()` — override it to
+opt your plugin in. A plugin that doesn't override it shows *"This plugin's settings cannot be
+searched."* while a query is active; its normal tabs are unaffected when the box is empty.
+
+Each `SettingSearchEntry` carries a **section** breadcrumb (where the option normally lives, also
+shown as the result heading), a searchable **label**, a **draw** delegate, and optional extra
+**keywords**. The draw delegate should render *the same widget your normal view uses* — it owns the
+side effects, so reuse a shared method when the logic is non-trivial. Declare each flat option as
+its own entry; represent a large dynamic cluster (a list, per-item tabs) as a single entry whose
+delegate draws the whole cluster.
+
+```csharp
+public override IEnumerable<SettingSearchEntry> GetSearchableSettings() => new[]
+{
+    // A flat option restated inline — cheap, one widget.
+    new SettingSearchEntry("Settings", "Show overlay",
+        () => ImGui.Checkbox("Show overlay", ref settings.ShowOverlay), "visible hud"),
+
+    // An option with side effects: extract a shared method and call it from both
+    // DrawSettings() and here, so there is a single source of truth.
+    new SettingSearchEntry("Settings", "Bar width", DrawBarWidthOption),
+
+    // A whole cluster behind one entry (the delegate draws the entire block).
+    new SettingSearchEntry("Advanced", "Color profiles", DrawColorProfiles,
+        "palette theme colours"),
+};
+```
+
+Matching is case-insensitive and tests the label, the section, and the keywords. Returning a fresh
+list each call is fine — keep the delegates light since they run per frame while searching.
 
 ## Settings
 

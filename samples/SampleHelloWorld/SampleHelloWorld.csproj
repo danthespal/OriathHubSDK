@@ -14,7 +14,7 @@
 
   <PropertyGroup>
     <OutputType>Library</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
     <Nullable>enable</Nullable>
     <NoWarn>1701;1702;1591</NoWarn>
@@ -22,17 +22,33 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.3.7" />
+    <PackageReference Include="OriathHub.Sdk" Version="0.4.0" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <!--
+      Folder that holds the running OriathHub.exe. As an external plugin author (you only have the
+      .nupkg, not the OriathHub source tree), point this at your OriathHub install so the build
+      auto-deploys the plugin, e.g.:
+          dotnet build SampleHelloWorld.csproj -p:OriathHubDir="C:\Games\OriathHub"
+      or set it once here. If left unset/non-existent the deploy step is skipped (the built DLL
+      still lands in bin\ for you to copy into <install>\Plugins\<PluginName>\ manually).
+
+      The default below resolves to the in-repo host output so the sample still deploys when built
+      inside the OriathHub repository.
+    -->
+    <OriathHubDir Condition="'$(OriathHubDir)' == '' and '$(HostTfm)' != ''">$(MSBuildThisFileDirectory)..\..\..\OriathHub\bin\$(Configuration)\$(HostTfm)</OriathHubDir>
+  </PropertyGroup>
 
   <!--
     Deploy only this plugin's own DLL into the host's Plugins/SampleHelloWorld/ folder.
     OriathHub.dll, GameOffsets.dll and the shared third-party DLLs already live in the host
-    output directory, so they must not be copied here.
+    output directory, so they must not be copied here. Skipped when OriathHubDir is unset or does
+    not exist, so a standalone build (no host install) still succeeds.
   -->
-  <Target Name="CopyToHostPluginsDir" AfterTargets="Build">
+  <Target Name="CopyToHostPluginsDir" AfterTargets="Build" Condition="Exists('$(OriathHubDir)')">
     <Copy SourceFiles="$(OutDir)$(TargetName)$(TargetExt)"
-          DestinationFolder="..\..\..\OriathHub\bin\$(Configuration)\$(HostTfm)\Plugins\$(ProjectName)"
+          DestinationFolder="$(OriathHubDir)\Plugins\$(AssemblyName)"
           SkipUnchangedFiles="true" />
   </Target>
 

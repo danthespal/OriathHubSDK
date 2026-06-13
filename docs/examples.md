@@ -357,17 +357,17 @@ Use `ReadMemoryRequired<T>` only for one-shot startup reads where failure means 
 
 ## Copy plugin assets and dependencies
 
-The loader finds `Plugins/<FolderName>/<FolderName>*.dll` next to the running `OriathHub.exe`. If your plugin has assets or non-SDK dependencies, copy them beside your plugin DLL.
+The loader finds `Plugins/<FolderName>/<FolderName>*.dll` next to the running `OriathHub.exe`. If your plugin has assets or non-SDK dependencies, copy them beside your plugin DLL. This reuses the `OriathHubDir` property from [getting-started](getting-started.md) — set it to your install folder.
 
 ```xml
-<Target Name="CopyToHostPluginsDir" AfterTargets="Build">
+<Target Name="CopyToHostPluginsDir" AfterTargets="Build" Condition="Exists('$(OriathHubDir)')">
   <ItemGroup>
     <PluginFiles Include="$(OutDir)$(TargetName)$(TargetExt)" />
     <PluginFiles Include="$(OutDir)MyExtraDependency.dll" />
     <PluginFiles Include="textures\icon.png" />
   </ItemGroup>
   <Copy SourceFiles="@(PluginFiles)"
-        DestinationFolder="PATH\TO\OriathHub\bin\Debug\net10.0\Plugins\$(ProjectName)"
+        DestinationFolder="$(OriathHubDir)\Plugins\$(AssemblyName)"
         SkipUnchangedFiles="true" />
 </Target>
 ```

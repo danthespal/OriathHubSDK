@@ -72,6 +72,20 @@ namespace OriathHub.Plugins.SampleHelloWorld
             ImGui.ColorEdit4("Text colour", ref settings.TextColor);
         }
 
+        /// <summary>
+        ///     Makes this plugin's options findable from the settings window's search box.
+        ///     Each entry declares where the option lives (section breadcrumb), its searchable
+        ///     label, and a delegate that draws the very same widget the normal settings view uses.
+        /// </summary>
+        /// <inheritdoc/>
+        public override IEnumerable<SettingSearchEntry> GetSearchableSettings() => new[]
+        {
+            new SettingSearchEntry("Settings", "Show info window",
+                () => ImGui.Checkbox("Show info window", ref settings.Show), "visible overlay toggle"),
+            new SettingSearchEntry("Settings", "Text colour",
+                () => ImGui.ColorEdit4("Text colour", ref settings.TextColor), "color font"),
+        };
+
         /// <inheritdoc/>
         public override void DrawUI()
         {

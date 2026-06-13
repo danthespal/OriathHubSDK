@@ -28,7 +28,9 @@ NuGet resolves `OriathHub.Sdk` from that folder when your plugin project referen
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- net10.0-windows matches the host; host APIs are [SupportedOSPlatform("windows")], so a
+         plain net10.0 plugin raises CA1416 on every host call. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -36,23 +38,28 @@ NuGet resolves `OriathHub.Sdk` from that folder when your plugin project referen
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.3.0" />
+    <PackageReference Include="OriathHub.Sdk" Version="0.4.0" />
   </ItemGroup>
 
-  <!-- Deploy only your plugin DLL to the host output folder. -->
-  <Target Name="CopyToHostPluginsDir" AfterTargets="Build">
+  <PropertyGroup>
+    <!-- Folder that holds the running OriathHub.exe. Set it to your install so the build
+         auto-deploys the plugin. Left unset/non-existent, the deploy step is skipped and the
+         built DLL just stays in bin\ for you to copy manually. -->
+    <OriathHubDir Condition="'$(OriathHubDir)' == ''">C:\Games\OriathHub</OriathHubDir>
+  </PropertyGroup>
+
+  <!-- Deploy only your plugin DLL to the host output folder. The folder is named after the
+       assembly because the loader looks for Plugins/<FolderName>/<FolderName>*.dll. Skipped when
+       OriathHubDir does not exist, so a build without an install still succeeds. -->
+  <Target Name="CopyToHostPluginsDir" AfterTargets="Build" Condition="Exists('$(OriathHubDir)')">
     <Copy SourceFiles="$(OutDir)$(TargetName)$(TargetExt)"
-          DestinationFolder="PATH\TO\OriathHub\bin\Debug\net10.0\Plugins\$(ProjectName)"
+          DestinationFolder="$(OriathHubDir)\Plugins\$(AssemblyName)"
           SkipUnchangedFiles="true" />
   </Target>
 </Project>
 ```
 
-Replace `PATH\TO\OriathHub\bin\Debug\net10.0` with the folder that contains the `OriathHub.exe` you run. For an in-repo plugin under `Plugins/MyPlugin/`, the destination usually looks like this:
-
-```xml
-DestinationFolder="..\..\OriathHub\$(OutDir)Plugins\$(ProjectName)"
-```
+Set `OriathHubDir` to the folder that contains the `OriathHub.exe` you run — either in the project as above, or per build: `dotnet build MyPlugin.csproj -p:OriathHubDir="C:\Games\OriathHub"`. The `Exists` condition means a build without a matching install simply skips the copy instead of failing.
 
 The loader looks for `Plugins/<FolderName>/<FolderName>*.dll`. Your folder name and assembly name do not have to be identical, but the DLL file name must start with the folder name.
 
@@ -132,10 +139,10 @@ If the DLL contains zero or more than one sealed `PluginBase` subclass, the load
    dotnet build PATH\TO\MyPlugin.csproj -c Debug
    ```
 
-2. Confirm the DLL is under the running host folder:
+2. Confirm the DLL landed under your install's `Plugins` folder:
 
    ```text
-   OriathHub/bin/Debug/net10.0/Plugins/MyPlugin/MyPlugin.dll
+   <OriathHubDir>/Plugins/MyPlugin/MyPlugin.dll
    ```
 
 3. Launch OriathHub, open the Plugins tab, and enable your plugin.
@@ -149,12 +156,12 @@ The SDK references `OriathHub`, `GameOffsets`, ImGui, Coroutine, Newtonsoft.Json
 If your plugin has assets, copy them into the same plugin folder and load them through `DllDirectory`:
 
 ```xml
-<Target Name="CopyAssetsToHost" AfterTargets="Build">
+<Target Name="CopyAssetsToHost" AfterTargets="Build" Condition="Exists('$(OriathHubDir)')">
   <ItemGroup>
     <PluginAssets Include="textures\*.*" />
   </ItemGroup>
   <Copy SourceFiles="@(PluginAssets)"
-        DestinationFolder="PATH\TO\OriathHub\bin\Debug\net10.0\Plugins\$(ProjectName)\textures"
+        DestinationFolder="$(OriathHubDir)\Plugins\$(AssemblyName)\textures"
         SkipUnchangedFiles="true" />
 </Target>
 ```

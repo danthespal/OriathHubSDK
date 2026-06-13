@@ -764,6 +764,16 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `TryGetParent(out parent)` | `bool` | Returns the cached parent element if one is available. During transitions this can return `false`. |
 | `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range. |
 
+To read a UI element the host does **not** already expose — when you have its address from your own offsets — use the static factory:
+
+```csharp
+var panel = UiElementBase.Read(address);   // OriathHub.RemoteObjects.UiElement
+if (panel.IsVisible)
+    ImGui.GetForegroundDrawList().AddRect(panel.Position, panel.Position + panel.Size, 0xFF00FF00);
+```
+
+`Read` parses the element immediately and resolves its parent chain via a shared internal cache, so `Position`/`Size` are correct and reading the same element each frame allocates nothing extra. Reassign `.Address` to refresh it on a later frame.
+
 **`MapUiElement` members (`LargeMap` and `MiniMap`):**
 
 | Member | Type | Description |
@@ -903,8 +913,10 @@ Subscribe in a coroutine started from `OnEnable`. Cancel it in `OnDisable`. Thes
 | `OriathEvents.OnMoved` | `OriathEvents` | Game window moved or resized. |
 | `OriathEvents.OnForegroundChanged` | `OriathEvents` | Game window gained or lost foreground. |
 | `OriathEvents.OnClose` | `OriathEvents` | Game process is closing. |
+| `OriathEvents.PerFrameDataUpdate` | `OriathEvents` | Once per frame, before rendering. Wait on this to refresh your own data ahead of `DrawUI`. |
+| `OriathEvents.PostPerFrameDataUpdate` | `OriathEvents` | After `PerFrameDataUpdate`, as close to render as possible — for the freshest reads. |
 
-> The host's per-frame pump (`OriathEvents.PerFrameDataUpdate` and friends) is `internal` and not reachable from a plugin. For per-frame work just use `DrawUI` — it runs every rendered frame, and the host's parsed data (entities, player, deltas) is already refreshed by the time it's called.
+> For most per-frame work you don't need these: `DrawUI` runs every rendered frame and the host's parsed data (entities, player, deltas) is already refreshed by the time it's called. Use `PerFrameDataUpdate`/`PostPerFrameDataUpdate` only when you must do data work in a coroutine *before* drawing (e.g. to feed another coroutine).
 
 ```csharp
 using Coroutine;
