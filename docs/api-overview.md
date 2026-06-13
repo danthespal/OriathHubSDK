@@ -764,15 +764,20 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `TryGetParent(out parent)` | `bool` | Returns the cached parent element if one is available. During transitions this can return `false`. |
 | `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range. |
 
-To read a UI element the host does **not** already expose — when you have its address from your own offsets — use the static factory:
+To wrap a UI element the host does **not** already expose, create a small derived type and pass the raw UI-element address to the protected base constructor:
 
 ```csharp
-var panel = UiElementBase.Read(address);   // OriathHub.RemoteObjects.UiElement
+public sealed class CustomPanelElement : UiElementBase
+{
+    public CustomPanelElement(IntPtr address) : base(address) { }
+}
+
+var panel = new CustomPanelElement(address);
 if (panel.IsVisible)
     ImGui.GetForegroundDrawList().AddRect(panel.Position, panel.Position + panel.Size, 0xFF00FF00);
 ```
 
-`Read` parses the element immediately and resolves its parent chain via a shared internal cache, so `Position`/`Size` are correct and reading the same element each frame allocates nothing extra. Reassign `.Address` to refresh it on a later frame.
+The protected constructor parses the element immediately and resolves its parent chain via a shared internal cache, so `Position`/`Size` are correct. Reassign `.Address` to refresh it on a later frame.
 
 **`MapUiElement` members (`LargeMap` and `MiniMap`):**
 
@@ -1160,6 +1165,86 @@ if (Core.Process.ReadMemory<MyCustomStruct>(addr, out var raw))
     string name  = Core.Process.ReadStdWString(raw.Name);
 }
 // else: read failed (torn frame, bad address) — handle or skip
+```
+
+### Custom remote objects
+
+For data the host does not track, wrap the address in your own `RemoteObjectBase` subclass. Use `forceUpdate: true` when the same address should be refreshed every frame, and use `skipFirstUpdate: true` so the base constructor does not call your override before your derived fields are initialized.
+
+`RemoteObjectBase`, `UiElementBase`, and `ComponentBase` expose their constructor/update/cleanup/diagnostic hooks to derived plugin types. Override `UpdateData` and `CleanUpData` for the memory lifecycle, and override `ToImGui` only if you want host-style diagnostics for your custom wrapper.
+
+```csharp
+using OriathHub.RemoteObjects;
+using System;
+using System.Runtime.InteropServices;
+
+[StructLayout(LayoutKind.Explicit, Pack = 1)]
+private struct CustomTrackedStruct
+{
+    [FieldOffset(0x18)] public int Value;
+}
+
+private sealed class CustomTrackedObject : RemoteObjectBase
+{
+    public CustomTrackedObject(IntPtr address)
+        : base(IntPtr.Zero, forceUpdate: true, skipFirstUpdate: true)
+    {
+        this.Address = address;
+    }
+
+    public int Value { get; private set; }
+
+    protected override void UpdateData(bool hasAddressChanged)
+    {
+        if (Core.Process.ReadMemory<CustomTrackedStruct>(this.Address, out var raw))
+        {
+            this.Value = raw.Value;
+        }
+    }
+
+    protected override void CleanUpData()
+    {
+        this.Value = 0;
+    }
+}
+```
+
+Refresh plugin-owned objects from a coroutine that waits on `OriathEvents.PerFrameDataUpdate`; this runs before the plugin render pass.
+
+```csharp
+using Coroutine;
+using OriathHub.CoroutineEvents;
+using System.Collections.Generic;
+
+private ActiveCoroutine? refreshCoroutine;
+private CustomTrackedObject? tracked;
+
+public override void OnEnable(bool isGameOpened)
+{
+    tracked = new CustomTrackedObject(IntPtr.Zero);
+    refreshCoroutine = CoroutineHandler.Start(RefreshCustomData(), "MyPlugin.CustomData");
+}
+
+public override void OnDisable()
+{
+    refreshCoroutine?.Cancel();
+    refreshCoroutine = null;
+    tracked = null;
+}
+
+private IEnumerator<Wait> RefreshCustomData()
+{
+    while (true)
+    {
+        yield return new Wait(OriathEvents.PerFrameDataUpdate);
+
+        IntPtr address = FindCurrentCustomAddress();
+        if (tracked != null)
+        {
+            tracked.Address = address;
+        }
+    }
+}
 ```
 
 All read methods on `Core.Process`:

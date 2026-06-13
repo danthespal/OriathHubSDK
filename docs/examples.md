@@ -355,6 +355,74 @@ private static void TryReadCustomData(IntPtr address)
 
 Use `ReadMemoryRequired<T>` only for one-shot startup reads where failure means the offset is wrong. Do not use required reads in `DrawUI`, entity loops, or parallel code.
 
+## Refresh a custom remote object before drawing
+
+If the host does not track a memory object your plugin needs, derive from `RemoteObjectBase` and refresh it from `OriathEvents.PerFrameDataUpdate`. Pass `forceUpdate: true` so assigning the same address again still re-reads the data.
+
+```csharp
+using Coroutine;
+using OriathHub.CoroutineEvents;
+using OriathHub.RemoteObjects;
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+[StructLayout(LayoutKind.Explicit, Pack = 1)]
+private struct CustomTrackedStruct
+{
+    [FieldOffset(0x18)] public int Value;
+}
+
+private sealed class CustomTrackedObject : RemoteObjectBase
+{
+    public CustomTrackedObject(IntPtr address)
+        : base(IntPtr.Zero, forceUpdate: true, skipFirstUpdate: true)
+    {
+        Address = address;
+    }
+
+    public int Value { get; private set; }
+
+    protected override void UpdateData(bool hasAddressChanged)
+    {
+        if (Core.Process.ReadMemory<CustomTrackedStruct>(Address, out var raw))
+        {
+            Value = raw.Value;
+        }
+    }
+
+    protected override void CleanUpData()
+    {
+        Value = 0;
+    }
+}
+
+private ActiveCoroutine? refreshCoroutine;
+private CustomTrackedObject? tracked;
+
+public override void OnEnable(bool isGameOpened)
+{
+    tracked = new CustomTrackedObject(IntPtr.Zero);
+    refreshCoroutine = CoroutineHandler.Start(RefreshCustomData(), "MyPlugin.CustomData");
+}
+
+public override void OnDisable()
+{
+    refreshCoroutine?.Cancel();
+    refreshCoroutine = null;
+    tracked = null;
+}
+
+private IEnumerator<Wait> RefreshCustomData()
+{
+    while (true)
+    {
+        yield return new Wait(OriathEvents.PerFrameDataUpdate);
+        tracked!.Address = FindCurrentCustomAddress();
+    }
+}
+```
+
 ## Copy plugin assets and dependencies
 
 The loader finds `Plugins/<FolderName>/<FolderName>*.dll` next to the running `OriathHub.exe`. If your plugin has assets or non-SDK dependencies, copy them beside your plugin DLL. This reuses the `OriathHubDir` property from [getting-started](getting-started.md) — set it to your install folder.

@@ -6,11 +6,14 @@ namespace OriathHub.Plugins.SampleHelloWorld
     using OriathHub.CoroutineEvents;
     using OriathHub.Plugin;
     using OriathHub.RemoteEnums;
+    using OriathHub.RemoteObjects;
     using OriathHub.RemoteObjects.Components;
     using OriathHub.Utils;
+    using System;
     using System.Collections.Generic;
     using System.IO;
     using System.Numerics;
+    using System.Runtime.InteropServices;
 
     /// <summary>
     ///     The smallest useful OriathHub plugin: a draggable info window that reports the current
@@ -24,6 +27,8 @@ namespace OriathHub.Plugins.SampleHelloWorld
     {
         private SampleHelloWorldSettings settings = new();
         private ActiveCoroutine? areaChangeCoroutine;
+        private ActiveCoroutine? playerProbeCoroutine;
+        private PlayerProbe? playerProbe;
         private bool toggleHotkeyDown;
 
         // Settings live next to the plugin DLL. DllDirectory is set by the loader before OnEnable.
@@ -47,6 +52,11 @@ namespace OriathHub.Plugins.SampleHelloWorld
             settings = JsonHelper.CreateOrLoadJsonFile<SampleHelloWorldSettings>(SettingsFile);
             Log.Info("enabled", this.Name);
             areaChangeCoroutine = CoroutineHandler.Start(LogAreaChanges(), "SampleHelloWorld.AreaChange");
+
+            // Reference pattern: a custom memory object the host does not track, refreshed from the
+            // PerFrameDataUpdate event so the read happens during the data phase, not while drawing.
+            playerProbe = new PlayerProbe();
+            playerProbeCoroutine = CoroutineHandler.Start(RefreshPlayerProbe(), "SampleHelloWorld.PlayerProbe");
         }
 
         /// <inheritdoc/>
@@ -54,6 +64,9 @@ namespace OriathHub.Plugins.SampleHelloWorld
         {
             areaChangeCoroutine?.Cancel();
             areaChangeCoroutine = null;
+            playerProbeCoroutine?.Cancel();
+            playerProbeCoroutine = null;
+            playerProbe = null;
         }
 
         private IEnumerator<Wait> LogAreaChanges()
@@ -62,6 +75,26 @@ namespace OriathHub.Plugins.SampleHelloWorld
             {
                 yield return new Wait(RemoteEvents.AreaChanged);
                 Log.Info("area changed", this.Name);
+            }
+        }
+
+        /// <summary>
+        ///     Drives <see cref="playerProbe"/> from the per-frame data phase. This is the correct
+        ///     place to assign an address and trigger a memory read: it runs before drawing, on the
+        ///     same schedule the host uses for its own objects, so it never races a render-thread read.
+        /// </summary>
+        private IEnumerator<Wait> RefreshPlayerProbe()
+        {
+            while (true)
+            {
+                yield return new Wait(OriathEvents.PerFrameDataUpdate);
+
+                // Assigning Address drives the object lifecycle: non-zero -> UpdateData, zero ->
+                // CleanUpData. The player address is stable across frames, so PlayerProbe is built
+                // with forceUpdate so the same address still re-reads the (changing) data each frame.
+                playerProbe!.Address = Core.States.GameCurrentState == GameStateTypes.InGameState
+                    ? Core.States.InGameStateObject.CurrentAreaInstance.Player.Address
+                    : IntPtr.Zero;
             }
         }
 
@@ -117,8 +150,9 @@ namespace OriathHub.Plugins.SampleHelloWorld
                         ImGui.Text($"Player HP: {life.Health.Current} ({life.Health.CurrentInPercent():0}%)");
                     }
 
-                    Core.Process.ReadMemory<long>(area.Player.Address, out var firstQword);
-                    ImGui.Text($"Player base[0]: 0x{firstQword:X}");
+                    // Already refreshed off the render thread by PlayerProbe (see RefreshPlayerProbe);
+                    // here we only read the cached value, so no memory read happens while drawing.
+                    ImGui.Text($"Player base[0]: 0x{(playerProbe?.BasePointer ?? 0):X}");
                 }
                 else
                 {
@@ -135,6 +169,51 @@ namespace OriathHub.Plugins.SampleHelloWorld
         public override void SaveSettings()
         {
             JsonHelper.SaveToFile(settings, SettingsFile);
+        }
+
+        /// <summary>
+        ///     The native layout the probe reads. A real plugin maps the exact fields it needs at the
+        ///     offsets discovered for its target struct; here we read only the object's first pointer
+        ///     field as a stable, offset-free example value.
+        /// </summary>
+        [StructLayout(LayoutKind.Explicit, Pack = 1)]
+        private struct PlayerProbeNative
+        {
+            [FieldOffset(0x00)] public long BasePointer;
+        }
+
+        /// <summary>
+        ///     Minimal example of tracking a memory object the host does not wrap. Derive from
+        ///     <see cref="RemoteObjectBase"/>, read in <see cref="UpdateData"/>, reset in
+        ///     <see cref="CleanUpData"/>, and let a PerFrameDataUpdate coroutine assign
+        ///     <see cref="RemoteObjectBase.Address"/> (see <see cref="RefreshPlayerProbe"/>).
+        /// </summary>
+        private sealed class PlayerProbe : RemoteObjectBase
+        {
+            // skipFirstUpdate: nothing to read at construction (no address yet); the coroutine drives it.
+            // forceUpdate: re-read every frame even though the player address does not change.
+            public PlayerProbe()
+                : base(IntPtr.Zero, forceUpdate: true, skipFirstUpdate: true)
+            {
+            }
+
+            /// <summary>Gets the player object's first pointer field, refreshed once per frame.</summary>
+            public long BasePointer { get; private set; }
+
+            /// <inheritdoc/>
+            protected override void UpdateData(bool hasAddressChanged)
+            {
+                if (Core.Process.ReadMemory<PlayerProbeNative>(Address, out var raw))
+                {
+                    BasePointer = raw.BasePointer;
+                }
+            }
+
+            /// <inheritdoc/>
+            protected override void CleanUpData()
+            {
+                BasePointer = 0;
+            }
         }
     }
 }
