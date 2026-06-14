@@ -805,7 +805,7 @@ The protected constructor parses the element immediately and resolves its parent
 | `AtlasMapsNodeUiElement.NodeIndex` | `int` | Index inside the current atlas map node collection. |
 | `AtlasMapsNodeUiElement.IsCompleted` | `bool` | `true` when `StatusState == 3`. |
 | `AtlasMapsNodeUiElement.CanRun` | `bool` | `true` when `StatusState == 1`. |
-| `AtlasMapsNodeUiElement.Content` | `IReadOnlyList<string>` | Content-icon stems displayed on the node (e.g. `MapBoss`, `Breach`, `Expedition`), derived from its nested `AtlasIconContent*` image elements. Empty when the node has no rolled content. Cross-reference display names via `EndgameMapContent`. |
+| `AtlasMapsNodeUiElement.Content` | `IReadOnlyList<string>` | Canonical display names of the content rolled on the node (e.g. `Powerful Map Boss`, `Breach`, `Expedition`), read from the node's nested content elements. These match the names in `EndgameMapContent` verbatim. Empty when the node has no rolled content. |
 
 `EndgameMapBiomeId` maps to the `_rid` field in `EndgameMapBiomes.dat`:
 
