@@ -748,7 +748,7 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `LargeMap` | `LargeMapUiElement` | The in-area large map. |
 | `MiniMap` | `MapUiElement` | The minimap. |
 | `ChatParent` | `ChatParentUiElement` | The chat UI element. |
-| `SkillTreeNodesUiElements` | `List<SkillTreeNodeUiElement>` | Passive or atlas skill-tree nodes currently drawable by the game and intersecting the game window while the tree is open. This is the current viewport subset, not a full passive/atlas database. Each node exposes `SkillGraphId` (`int`) and `Position` (`Vector2`). |
+| `SkillTreeNodesUiElements` | `List<SkillTreeNodeUiElement>` | Passive or atlas skill-tree node UI elements currently drawable by the game and intersecting the game window while the tree is open. This is the current viewport list, not a full passive/atlas database. For atlas, the list is read from the `AtlasSkillTreePanel` viewport/canvas. Each node exposes `SkillGraphId` (`int`) and `Position` (`Vector2`). |
 | `AtlasMapsNodesUiElements` | `List<AtlasMapsNodeUiElement>` | Atlas map node controls currently present on the endgame atlas map screen. Each node exposes UI-element basics plus map name/id, description, biome id, raw status flags, derived status state, completion, and current runnable state. |
 | `AtlasMapConnections` | `IReadOnlyList<AtlasMapNodeConnection>` | Connections (edges) between revealed atlas map nodes on the endgame atlas map. Each entry exposes `From` and `To` (`AtlasMapsNodeUiElement`); draw a routing line between `From.Position` and `To.Position`. Edges are deduplicated (one per undirected pair) and only include endpoints that have an on-screen control — connections involving fogged/unrevealed nodes are omitted. Owned and refreshed by the host; enumerate during `DrawUI`, do not mutate or cache across frames. |
 
@@ -762,7 +762,8 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `Scale` | `float` | Cached UI scale-like value exposed for compatibility. Position/size calculations use `Position` and `Size`. |
 | `TotalChildrens` | `int` | Number of child UI elements. The spelling matches the public API. |
 | `TryGetParent(out parent)` | `bool` | Returns the cached parent element if one is available. During transitions this can return `false`. |
-| `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range. |
+| `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range. Always returns the base type. |
+| `GetChildAddress(index)` | `IntPtr` | Address of the child at `index` without materializing it, or `IntPtr.Zero` if the index is invalid. Uses the already-cached child addresses, so no extra memory read. |
 
 To wrap a UI element the host does **not** already expose, create a small derived type and pass the raw UI-element address to the protected base constructor:
 
@@ -778,6 +779,16 @@ if (panel.IsVisible)
 ```
 
 The protected constructor parses the element immediately and resolves its parent chain via a shared internal cache, so `Position`/`Size` are correct. Reassign `.Address` to refresh it on a later frame.
+
+When you need child elements as your own derived type, use `GetChildAddress` instead of `this[index]`:
+
+```csharp
+for (var i = 0; i < panel.TotalChildrens; i++)
+{
+    var child = new CustomPanelElement(panel.GetChildAddress(i));
+    // ... use child.Position, child.Size, etc.
+}
+```
 
 **`MapUiElement` members (`LargeMap` and `MiniMap`):**
 
@@ -828,7 +839,9 @@ The protected constructor parses the element immediately and resolves its parent
 Use `IsSkillTreeOpen` when a plugin only needs to know that either tree is open. Use
 `IsPassiveSkillTreeOpen` or `IsAtlasSkillTreeOpen` when passive and atlas behavior should differ.
 `SkillTreeNodesUiElements` is owned and refreshed by the host; enumerate it during `DrawUI`, but do not
-add or remove entries from the list.
+add or remove entries from the list. For atlas, is the atlas skill-tree viewport panel,
+its first child is the canvas, and the exposed list contains node UI elements associated with atlas
+skill-tree data rows currently present in that viewport.
 
 ```csharp
 public override void DrawUI()
@@ -946,6 +959,8 @@ private IEnumerator<Wait> OnAreaChange()
     while (true)
     {
         yield return new Wait(RemoteEvents.AreaChanged);
+        // If the plugin is enabled after the current area has already loaded,
+        // this event will not fire once just for plugin startup.
         // clear per-area caches here
     }
 }

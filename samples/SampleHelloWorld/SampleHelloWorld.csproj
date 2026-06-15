@@ -22,7 +22,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.4.1" />
+    <PackageReference Include="OriathHub.Sdk" Version="$(OriathHubSdkVersion)" />
   </ItemGroup>
 
   <PropertyGroup>

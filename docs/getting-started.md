@@ -20,7 +20,7 @@ Put the `.nupkg` file you were given in a local folder and register that folder 
 </configuration>
 ```
 
-NuGet resolves `OriathHub.Sdk` from that folder when your plugin project references the package.
+NuGet resolves `OriathHub.Sdk` from that folder when your plugin project references the package. Use the package version distributed with the OriathHub build you are targeting.
 
 ## 1. Create the project
 
@@ -38,7 +38,7 @@ NuGet resolves `OriathHub.Sdk` from that folder when your plugin project referen
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.4.1" />
+    <PackageReference Include="OriathHub.Sdk" Version="0.4.4" />
   </ItemGroup>
 
   <PropertyGroup>

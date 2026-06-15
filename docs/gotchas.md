@@ -110,6 +110,8 @@ Use `ReadMemory<T>` and `ReadMemoryArray<T>` in `DrawUI`, entity loops, coroutin
 
 ## Skill tree nodes are a viewport list
 
-`Core.States.InGameStateObject.GameUi.SkillTreeNodesUiElements` contains the passive or atlas nodes the game is currently drawing in the visible tree viewport. It is not a complete passive or atlas database, and it changes as the player pans, zooms, or switches tree views.
+`Core.States.InGameStateObject.GameUi.SkillTreeNodesUiElements` contains the passive or atlas nodes the game is currently drawing in the visible tree viewport. For the atlas tree is the `AtlasSkillTreePanel` viewport, `AtlasSkillTreePanel[0]` is the canvas, and the host reads the tree node viewport list from that view. Each listed `SkillTreeNodeUiElement` is the UI element associated with the underlying atlas skill-tree data row.
+
+This is not a complete passive or atlas database, and it changes as the player pans, zooms, or switches tree views.
 
 Enumerate the list during `DrawUI`, but do not add, remove, or cache entries across frames. `SkillTreeNodeUiElement.Position` is the node center; use `node.Position - node.Size / 2f` when drawing a rectangle from top-left to bottom-right.

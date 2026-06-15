@@ -64,7 +64,7 @@ public sealed class MyPlugin : PluginBase
 
 ## Settings stored next to the plugin
 
-`DllDirectory` is set by the loader before `OnEnable`. Build all config and asset paths from it so reloads and copied plugin folders keep working.
+`DllDirectory` is set by the loader before your derived constructor body runs. Build all config and asset paths from it so reloads and copied plugin folders keep working.
 
 ```csharp
 public sealed class MySettings
@@ -219,6 +219,8 @@ private IEnumerator<Wait> OnAreaChanged()
     while (true)
     {
         yield return new Wait(RemoteEvents.AreaChanged);
+        // If the plugin is enabled after the current area has already loaded,
+        // this event will not fire once just for plugin startup.
         seenEntities.Clear();
         Log.Info("cleared area cache", Name);
     }

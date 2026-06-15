@@ -10,7 +10,7 @@ Every plugin derives from `OriathHub.Plugin.PluginBase`. The host (`PluginManage
 | `Description` | Read on demand | Short text next to the enable toggle. Required. |
 | `Author` | Read on demand | Optional (`virtual`, default empty string). Shown in the Plugins tab when set. |
 | `Version` | Read on demand | Optional (`virtual`, default empty string). Shown in the Plugins tab when set. |
-| `DllDirectory` | Set once before `OnEnable` | Absolute path to the folder containing your plugin DLL. Build config and asset paths from this value. Do not set it yourself. |
+| `DllDirectory` | Available during construction and later lifecycle calls | Absolute path to the folder containing your plugin DLL. Build config and asset paths from this value. Do not set it yourself. |
 | `OnEnable(bool isGameOpened)` | When the plugin is switched on, and at startup if it was enabled last session | Load settings, start coroutines, load textures, and initialize plugin state. |
 | `OnDisable()` | When the plugin is switched off or reloaded | Cancel coroutines, free textures, stop timers, close files, and clear static references. |
 | `DrawDashboard()` | Each frame while the Dashboard tab is active | Optional (`virtual`, default empty). Override to add a Dashboard tab, shown **first** in the plugin's detail view. The tab is hidden automatically when not overridden. |
@@ -18,7 +18,7 @@ Every plugin derives from `OriathHub.Plugin.PluginBase`. The host (`PluginManage
 | `DrawAdvancedSettings()` | Each frame while the Advanced tab is active | Optional (`virtual`, default empty). Override to expose power-user or technical controls in a separate tab. The Advanced tab is hidden automatically when not overridden. |
 | `GetSearchableSettings()` | Each frame while the settings search box has text | Optional (`virtual`, default none). Override to make your options findable from the settings window's search box. See [Making settings searchable](#making-settings-searchable). |
 | `DrawUI()` | Every rendered frame while enabled | Draw overlays and plugin windows. Keep it cheap and bail out early when there is nothing to draw. |
-| `SaveSettings()` | Periodically and on clean shutdown, only while enabled | Persist settings to disk. |
+| `SaveSettings()` | When the host raises its save event, only while enabled | Persist settings to disk. This happens when the settings window is closed, **Save Settings Now** is clicked, or the overlay shuts down cleanly. |
 
 For visual overlays, prefer `FocusHelper.IsGameOrOverlayForeground()` over `Core.Process.Foreground` when deciding whether to draw. That lets users focus the OriathHub settings window and still preview changes such as colors, sizes, and border thickness live over the game. Keep `Core.Process.Foreground` for hotkeys and automation logic that must only run while the game window itself is focused.
 
@@ -146,6 +146,8 @@ private IEnumerator<Wait> OnAreaChange()
     while (true)
     {
         yield return new Wait(RemoteEvents.AreaChanged);
+        // If the plugin is enabled after OriathHub has already started,
+        // this event will not fire once just for plugin startup.
         // reset per-area caches
     }
 }
