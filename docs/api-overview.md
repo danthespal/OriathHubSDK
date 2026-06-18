@@ -748,9 +748,8 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `LargeMap` | `LargeMapUiElement` | The in-area large map. |
 | `MiniMap` | `MapUiElement` | The minimap. |
 | `ChatParent` | `ChatParentUiElement` | The chat UI element. |
-| `SkillTreeNodesUiElements` | `List<SkillTreeNodeUiElement>` | Passive or atlas skill-tree node UI elements currently drawable by the game and intersecting the game window while the tree is open. This is the current viewport list, not a full passive/atlas database. For atlas, the list is read from the `AtlasSkillTreePanel` viewport/canvas. Each node exposes `SkillGraphId` (`int`) and `Position` (`Vector2`). |
-| `AtlasMapsNodesUiElements` | `List<AtlasMapsNodeUiElement>` | Atlas map node controls currently present on the endgame atlas map screen. Each node exposes UI-element basics plus map name/id, description, biome id, raw status flags, derived status state, completion, and current runnable state. |
-| `AtlasMapConnections` | `IReadOnlyList<AtlasMapNodeConnection>` | Connections (edges) between revealed atlas map nodes on the endgame atlas map. Each entry exposes `From` and `To` (`AtlasMapsNodeUiElement`); draw a routing line between `From.Position` and `To.Position`. Edges are deduplicated (one per undirected pair) and only include endpoints that have an on-screen control — connections involving fogged/unrevealed nodes are omitted. Owned and refreshed by the host; enumerate during `DrawUI`, do not mutate or cache across frames. |
+| `AtlasMapsNodesUiElements` | `List<AtlasMapsNodeUiElement>` | Atlas map node controls currently present on the endgame atlas map screen. **Only populated while a lease from `ImportantUiElements.RequestAtlasMapNodes()` is held** — see below. Each node exposes UI-element basics plus map name/id, description, biome id, raw status flags, derived status state, completion, and current runnable state. |
+| `AtlasMapConnections` | `IReadOnlyList<AtlasMapNodeConnection>` | Connections (edges) between revealed atlas map nodes on the endgame atlas map. Each entry exposes `From` and `To` (`AtlasMapsNodeUiElement`); draw a routing line between `From.Position` and `To.Position`. Edges are deduplicated (one per undirected pair) and only include endpoints that have an on-screen control — connections involving fogged/unrevealed nodes are omitted. **Only populated while a lease from `ImportantUiElements.RequestAtlasMapNodes()` is held.** Enumerate during `DrawUI`, do not mutate or cache across frames. |
 
 **`UiElementBase` common members:**
 
@@ -760,6 +759,7 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `Position` | `Vector2` | Screen position (top-left corner). |
 | `Size` | `Vector2` | Element size in pixels. |
 | `Scale` | `float` | Cached UI scale-like value exposed for compatibility. Position/size calculations use `Position` and `Size`. |
+| `Flags` | `uint` | Raw UI element flags read from the game. Useful for traversal predicates and diagnostics. |
 | `TotalChildrens` | `int` | Number of child UI elements. The spelling matches the public API. |
 | `TryGetParent(out parent)` | `bool` | Returns the cached parent element if one is available. During transitions this can return `false`. |
 | `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range. Always returns the base type. |
@@ -779,6 +779,15 @@ if (panel.IsVisible)
 ```
 
 The protected constructor parses the element immediately and resolves its parent chain via a shared internal cache, so `Position`/`Size` are correct. Reassign `.Address` to refresh it on a later frame.
+
+Use `UiElementTraversal` when you need to find descendants by a structural signature rather than fixed child indexes:
+
+```csharp
+var visibleLargeChild = UiElementTraversal.FindFirst(
+    panel,
+    element => element.IsVisible && element.Size.X > 500f,
+    maxDepth: 4);
+```
 
 When you need child elements as your own derived type, use `GetChildAddress` instead of `this[index]`:
 
@@ -804,8 +813,6 @@ for (var i = 0; i < panel.TotalChildrens; i++)
 |---|---|---|
 | `LargeMap.Center` | `Vector2` | Center point of the large map before shift/default-shift adjustments. |
 | `ChatParent.IsChatActive` | `bool` | `true` when the chat parent background alpha indicates the chat input is active. |
-| `SkillTreeNodeUiElement.SkillGraphId` | `int` | Passive/atlas skill graph ID for a skill-tree node control. |
-| `SkillTreeNodeUiElement.Position` | `Vector2` | Visual node center position on screen. For rectangle drawing, subtract `node.Size / 2f` to get the top-left. |
 | `AtlasMapsNodeUiElement.MapAreaId` | `string` | `WorldAreas.dat` id for the map node, such as `MapVaalFactory`. |
 | `AtlasMapsNodeUiElement.MapName` | `string` | Display map name, such as `The Assembly`. |
 | `AtlasMapsNodeUiElement.Description` | `string` | Atlas node flavour/description text. |
@@ -838,10 +845,26 @@ for (var i = 0; i < panel.TotalChildrens; i++)
 
 Use `IsSkillTreeOpen` when a plugin only needs to know that either tree is open. Use
 `IsPassiveSkillTreeOpen` or `IsAtlasSkillTreeOpen` when passive and atlas behavior should differ.
-`SkillTreeNodesUiElements` is owned and refreshed by the host; enumerate it during `DrawUI`, but do not
-add or remove entries from the list. For atlas, is the atlas skill-tree viewport panel,
-its first child is the canvas, and the exposed list contains node UI elements associated with atlas
-skill-tree data rows currently present in that viewport.
+
+`AtlasMapsNodesUiElements` and `AtlasMapConnections` are **opt-in**: the host skips atlas node enumeration
+by default and only computes it while at least one lease is active. Call
+`ImportantUiElements.RequestAtlasMapNodes()` in `OnEnable` and dispose the returned lease in `OnDisable`.
+Multiple plugins can each hold their own lease — the host uses a reference count internally.
+
+```csharp
+private IDisposable? atlasLease;
+
+public override void OnEnable(bool isGameOpened)
+{
+    this.atlasLease = ImportantUiElements.RequestAtlasMapNodes();
+}
+
+public override void OnDisable()
+{
+    this.atlasLease?.Dispose();
+    this.atlasLease = null;
+}
+```
 
 ```csharp
 public override void DrawUI()
@@ -887,32 +910,26 @@ if (minimap.IsVisible)
     ImGui.Text($"minimap zoom: {minimap.Zoom:0.00}");
 ```
 
-**Chat and skill tree elements:**
+**Chat element:**
 
 ```csharp
 var gameUi = Core.States.InGameStateObject.GameUi;
 if (gameUi.ChatParent.IsChatActive)
     return; // avoid drawing or handling hotkeys while typing
-
-if (gameUi.IsSkillTreeOpen)
-{
-    foreach (var node in gameUi.SkillTreeNodesUiElements)
-    {
-        ImGui.GetForegroundDrawList().AddText(node.Position, 0xFFFFFFFF, $"{node.SkillGraphId}");
-    }
-}
 ```
 
-If you want to draw a node bounds rectangle, remember that `SkillTreeNodeUiElement.Position` is the
-center point:
+**Atlas map nodes** (requires a lease — see above):
 
 ```csharp
-if (gameUi.IsSkillTreeOpen)
+public override void DrawUI()
 {
-    foreach (var node in gameUi.SkillTreeNodesUiElements)
+    var gameUi = Core.States.InGameStateObject.GameUi;
+    if (!gameUi.IsAtlasMapOpen)
+        return;
+
+    foreach (var node in gameUi.AtlasMapsNodesUiElements)
     {
-        var topLeft = node.Position - (node.Size / 2f);
-        ImGui.GetForegroundDrawList().AddRect(topLeft, topLeft + node.Size, 0xFFFFFFFF);
+        ImGui.GetForegroundDrawList().AddText(node.Position, 0xFFFFFFFF, node.MapName);
     }
 }
 ```
@@ -983,7 +1000,7 @@ bool isDelirium = Core.CurrentAreaLoadedFiles.PathNames
 
 `DrawUI()` runs inside an ImGui frame — use `ImGuiNET` directly.
 
-Visual overlays should usually keep drawing while either the game window or the OriathHub overlay/settings window is focused, so users can preview setting changes live. Gate those overlays with `OriathHub.Utils.FocusHelper.IsGameOrOverlayForeground()`. Keep `Core.Process.Foreground` for gameplay hotkeys and automation logic that must only run while the game itself is focused.
+Visual overlays should usually keep drawing while either the game window or the OriathHub overlay/settings window is focused, so users can preview setting changes live. Gate those overlays with `OriathHub.Utils.FocusHelper.IsGameOrOverlayForeground()`. Use `OriathHub.Utils.FocusHelper.IsGameForeground()` or `Core.Process.Foreground` for gameplay hotkeys, automation logic, and settings that must only consider the game window itself.
 
 ```csharp
 if (!FocusHelper.IsGameOrOverlayForeground())

@@ -63,7 +63,7 @@ Log.Error($"failed to load texture: {ex}", Name);
 
 - Check `GameCurrentState` before reading in-game objects.
 - Return early when neither the game nor OriathHub overlay is focused if your visual overlay does not need to draw; use `FocusHelper.IsGameOrOverlayForeground()` for this.
-- Use `Core.Process.Foreground` instead for foreground-only hotkeys and automation gates that must only run while the game itself is focused.
+- Use `FocusHelper.IsGameForeground()` or `Core.Process.Foreground` instead for foreground-only hotkeys, automation gates, and true "hide when game is in the background" settings.
 - Return early when `GameUi.IsAnyLargePanelOpen` if your world overlay would cover menus.
 - Cache expensive work outside `DrawUI` and update caches on events such as `RemoteEvents.AreaChanged`.
 
@@ -108,10 +108,23 @@ Use `RemoteEvents.AreaChanged` to reset per-area caches.
 
 Use `ReadMemory<T>` and `ReadMemoryArray<T>` in `DrawUI`, entity loops, coroutines, and other hot paths. Reserve required reads for one-shot startup checks where failure genuinely means an offset or layout is wrong.
 
-## Skill tree nodes are a viewport list
+## Atlas map nodes require an opt-in lease
 
-`Core.States.InGameStateObject.GameUi.SkillTreeNodesUiElements` contains the passive or atlas nodes the game is currently drawing in the visible tree viewport. For the atlas tree is the `AtlasSkillTreePanel` viewport, `AtlasSkillTreePanel[0]` is the canvas, and the host reads the tree node viewport list from that view. Each listed `SkillTreeNodeUiElement` is the UI element associated with the underlying atlas skill-tree data row.
+`GameUi.AtlasMapsNodesUiElements` and `GameUi.AtlasMapConnections` are empty by default. The host skips the per-frame atlas node enumeration unless at least one plugin holds a lease.
 
-This is not a complete passive or atlas database, and it changes as the player pans, zooms, or switches tree views.
+Call `ImportantUiElements.RequestAtlasMapNodes()` in `OnEnable` and dispose the returned `IDisposable` in `OnDisable`. Forgetting to dispose leaves the reference count permanently incremented, so nodes are computed every frame even after the plugin is disabled.
 
-Enumerate the list during `DrawUI`, but do not add, remove, or cache entries across frames. `SkillTreeNodeUiElement.Position` is the node center; use `node.Position - node.Size / 2f` when drawing a rectangle from top-left to bottom-right.
+```csharp
+private IDisposable? atlasLease;
+
+public override void OnEnable(bool isGameOpened)
+{
+    this.atlasLease = ImportantUiElements.RequestAtlasMapNodes();
+}
+
+public override void OnDisable()
+{
+    this.atlasLease?.Dispose();
+    this.atlasLease = null;
+}
+```

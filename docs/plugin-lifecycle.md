@@ -20,7 +20,7 @@ Every plugin derives from `OriathHub.Plugin.PluginBase`. The host (`PluginManage
 | `DrawUI()` | Every rendered frame while enabled | Draw overlays and plugin windows. Keep it cheap and bail out early when there is nothing to draw. |
 | `SaveSettings()` | When the host raises its save event, only while enabled | Persist settings to disk. This happens when the settings window is closed, **Save Settings Now** is clicked, or the overlay shuts down cleanly. |
 
-For visual overlays, prefer `FocusHelper.IsGameOrOverlayForeground()` over `Core.Process.Foreground` when deciding whether to draw. That lets users focus the OriathHub settings window and still preview changes such as colors, sizes, and border thickness live over the game. Keep `Core.Process.Foreground` for hotkeys and automation logic that must only run while the game window itself is focused.
+For visual overlays, prefer `FocusHelper.IsGameOrOverlayForeground()` over `Core.Process.Foreground` when deciding whether to draw. That lets users focus the OriathHub settings window and still preview changes such as colors, sizes, and border thickness live over the game. Use `FocusHelper.IsGameForeground()` or `Core.Process.Foreground` for hotkeys, automation logic, and true "hide when game is in the background" settings.
 
 ## Settings tabs
 
