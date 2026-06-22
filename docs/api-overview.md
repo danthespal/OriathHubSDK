@@ -187,7 +187,7 @@ if (entity.TryGetComponent<Render>(out var render))
 | `DeliriumSpawner` | Delirium ShardPack spawner. |
 | `DeliriumBomb` | Delirium volatile bomb. |
 | `OtherImportantObjects` | Objects matching the `SpecialMiscObjPaths` host setting. |
-| `Item` | World-dropped item (classification partially implemented). |
+| `Item` | Item entity — ground drop (`WorldItem`) or inventory item (`InventoryItem`). |
 | `Unidentified` | Not yet classified. |
 
 ### EntitySubtypes (selection)
@@ -230,11 +230,28 @@ if (entity.IsOrWasMonsterSubType(EntitySubtypes.PinnacleBoss)) { /* ... */ }
 
 ## Server data and inventories
 
-`area.ServerDataObject` (`ServerData`) exposes player server-side data wrappers. The public surface currently includes flask inventory data.
+`area.ServerDataObject` (`ServerData`) exposes player server-side data wrappers, including access to every loaded inventory — equipment, the main inventory, and any open stash tabs.
 
 | Member | Type | Description |
 |---|---|---|
 | `FlaskInventory` | `Inventory` | Inventory wrapper for the flask slots (`InventoryName.Flask1`). |
+| `AvailableInventories` | `IReadOnlyCollection<InventoryName>` | Inventory names currently present on the player's server data. Stash tabs carry dynamic ids beyond the named `InventoryName` values and appear here as unnamed `InventoryName` casts. |
+| `GetInventory(name)` | `Inventory` | Returns a cached, self-updating wrapper for the given inventory. Safe to call every frame — the host keeps its address and items current (~5×/sec). When the inventory is not present the wrapper has a zero address and empty `Items`, filling in automatically once it appears. Pass any value from `AvailableInventories` (including stash-tab casts). |
+
+```csharp
+// Price/inspect every loaded inventory, including open stash tabs.
+var serverData = area.ServerDataObject;
+foreach (var name in serverData.AvailableInventories)
+{
+    var inv = serverData.GetInventory(name);
+    foreach (var item in inv.Items.Values)
+    {
+        if (!item.IsValid) continue;
+        var count = item.TryGetComponent<Stack>(out var stack) ? stack.Count : 1;
+        Log.Info($"{name}: {item.Path} x{count}", Name);
+    }
+}
+```
 
 **`Inventory` members:**
 
@@ -289,6 +306,52 @@ All component classes inherit from `ComponentBase`, which exposes the remote `Ad
 if (entity.TryGetComponent<Life>(out var life) && !life.IsParentValid(entity.Address))
     return; // stale component from a torn frame; skip this entity
 ```
+
+### Plugin-provided components and the registry
+
+A component wrapper is just a `ComponentBase` subclass whose **type name matches the game's component name**. You can ship your own for a component the host does not model — give it a `public (IntPtr)` constructor and override `UpdateData`:
+
+```csharp
+using OriathHub.RemoteObjects.Components;
+
+// Rename "ExampleComponent" to the real component name as the game reports it (visible in the
+// entity inspector), and read your own offsets struct for its layout.
+public sealed class ExampleComponent : ComponentBase
+{
+    public ExampleComponent(IntPtr address) : base(address) { }
+    public int Value { get; private set; }
+
+    protected override void UpdateData(bool hasAddressChanged)
+    {
+        if (Core.Process.ReadMemory<ExampleLayout>(this.Address, out var data))
+            this.Value = data.Value;
+    }
+}
+
+// Read it from any entity — the generic overload works across plugins with no host change:
+if (entity.TryGetComponent<ExampleComponent>(out var c)) { /* c.Value */ }
+```
+
+See [examples — Provide a custom component](examples.md) for the full offsets-struct version.
+
+When a plugin loads, the host reflects over its assembly and registers every such type in **`ComponentRegistry`**, a `name -> Type` map seeded with the host components. This lets a component be resolved by name when the concrete type is not known at compile time — for the entity inspector, or for one plugin to reach a component another plugin defined.
+
+| Member | Description |
+|---|---|
+| `ComponentRegistry.TryResolve(name, out Type)` | Resolve a component name to its registered wrapper type. |
+| `ComponentRegistry.TryCreate(name, address, out ComponentBase)` | Raw factory: resolve and construct a wrapper at an address (does not consult an entity's component list). |
+| `ComponentRegistry.RegisteredNames` | Names of all registered components. |
+| `entity.TryGetComponent(string name, out ComponentBase, shouldCache = true)` | Entity-scoped, name-based component access (the string counterpart of `TryGetComponent<T>`). |
+
+```csharp
+// Resolve and inspect a component by name (e.g. supplied at runtime):
+if (entity.TryGetComponent("ExampleComponent", out var comp))
+{
+    // comp is ComponentBase; cast to the concrete type if you reference it, or read raw memory
+}
+```
+
+Names already registered by the host (or an earlier plugin) win — a plugin cannot shadow a host component; the collision is logged and ignored. Registrations are dropped when a plugin is reloaded from disk, so the wrapper type does not pin the old assembly in memory.
 
 ---
 
@@ -662,10 +725,56 @@ Item stack size.
 | Member | Type | Description |
 |---|---|---|
 | `Count` | `int` | Current stack size. |
+| `MaxCount` | `int` | Maximum stack size for this item's base type; `0` when unavailable. |
 
 ```csharp
 if (item.TryGetComponent<Stack>(out var stack))
-    ImGui.Text($"stack size: {stack.Count}");
+    ImGui.Text($"stack: {stack.Count}/{stack.MaxCount}");
+```
+
+---
+
+### `Quality`
+
+Item quality. Present on items that can have quality.
+
+| Member | Type | Description |
+|---|---|---|
+| `ItemQuality` | `int` | Quality in percent (e.g. `20` for 20%). |
+
+```csharp
+if (item.TryGetComponent<Quality>(out var quality))
+    ImGui.Text($"quality: {quality.ItemQuality}%");
+```
+
+---
+
+### `SkillGem`
+
+Present on skill/support gem items.
+
+| Member | Type | Description |
+|---|---|---|
+| `Level` | `int` | Gem level. |
+
+```csharp
+if (item.TryGetComponent<SkillGem>(out var gem))
+    ImGui.Text($"gem level: {gem.Level}");
+```
+
+---
+
+### `RenderItem`
+
+Inventory-icon art path. Uniquely identifies an item's base/unique visual.
+
+| Member | Type | Description |
+|---|---|---|
+| `ResourcePath` | `string` | Art path of the item's inventory icon, e.g. `Art/2DItems/.../AmorMandragora.dds`. Empty when unavailable. |
+
+```csharp
+if (item.TryGetComponent<RenderItem>(out var render))
+    Log.Info($"art: {render.ResourcePath}", Name);
 ```
 
 ---

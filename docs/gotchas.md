@@ -47,6 +47,15 @@ Avoid unmanaged/native dependencies when possible. If you need one, test reload 
 - A plugin DLL must contain exactly one `sealed PluginBase` subclass.
 - Discovery and instantiation failures are logged through `Log` and the DLL is skipped.
 
+## Component wrappers are discovered by name
+
+If your plugin ships a `ComponentBase` subclass (see [examples](examples.md)), the host registers it by **type name** — which must match the game's component name — when the plugin loads.
+
+- The host registers its own components first, so a plugin can never replace a host component (e.g. your own `Life`). The collision is logged and the host's type is kept.
+- Two plugins that ship a component of the same name collide the same way: first loaded wins. Plugin folders load in alphabetical order.
+- Registrations are dropped when the plugin is reloaded from disk, so the wrapper type stops pinning the old assembly. They are re-registered from the rebuilt DLL.
+- A custom component still only resolves when the entity actually has that component; discovery only maps the name to a type, it does not invent the component on entities that lack it.
+
 ## Release has no console
 
 OriathHub Release is a `WinExe` with no console window. `Console.WriteLine` diagnostics are not useful for plugin users. Use `OriathHub.Utils.Log`; it writes to `oriathhub.log` next to the executable.

@@ -326,6 +326,65 @@ public override void DrawUI()
 }
 ```
 
+## Provide a custom component
+
+When the host does not wrap a game component your plugin needs, ship your own wrapper: a `ComponentBase` subclass whose **type name matches the game's component name**, with a `public (IntPtr)` constructor. The host discovers it by reflection when your plugin loads, so any entity can hand it back to you.
+
+The names and offsets below are placeholders. Rename `ExampleComponent` to the component name the game reports — you can read the names an entity exposes via `ComponentRegistry.RegisteredNames` or the host's entity inspector — and replace `ExampleLayout` with the real memory layout you reverse-engineer.
+
+```csharp
+using OriathHub.RemoteObjects.Components;
+using System.Runtime.InteropServices;
+
+// Your own offsets struct for the component's memory layout (offset is an example).
+[StructLayout(LayoutKind.Explicit, Pack = 1)]
+public struct ExampleLayout
+{
+    [FieldOffset(0x30)] public int Value;
+}
+
+// Type name "ExampleComponent" must match the game's component name.
+public sealed class ExampleComponent : ComponentBase
+{
+    public ExampleComponent(IntPtr address) : base(address) { }
+
+    public int Value { get; private set; }
+
+    protected override void UpdateData(bool hasAddressChanged)
+    {
+        if (Core.Process.ReadMemory<ExampleLayout>(this.Address, out var data))
+        {
+            Value = data.Value;
+        }
+    }
+}
+```
+
+Read it from any entity. The generic overload needs no host change and resolves the same wrapper across plugins:
+
+```csharp
+if (item.TryGetComponent<ExampleComponent>(out var example))
+{
+    ImGui.Text($"Value: {example.Value}");
+}
+```
+
+When the component name is only known at runtime — or you want a component another plugin defined — use the name-based overload, or query `ComponentRegistry` directly:
+
+```csharp
+if (entity.TryGetComponent("ExampleComponent", out var comp))
+{
+    // comp is ComponentBase; cast to ExampleComponent if your plugin references that type.
+}
+
+foreach (var name in ComponentRegistry.RegisteredNames)
+{
+    // every component name the host and loaded plugins provide
+}
+```
+
+Names already taken by the host (or an earlier plugin) win — you cannot replace a host `Life` with your own; the collision is logged and the host keeps its type. Your registrations are dropped automatically when the plugin is reloaded from disk, so the wrapper type does not pin the old assembly in memory.
+
 ## Read raw memory for unsupported data
 
 Prefer host wrappers first. When a wrapper does not expose the field you need, read through `Core.Process` and keep failure paths cheap.
