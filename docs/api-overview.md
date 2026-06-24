@@ -13,7 +13,7 @@ Everything a plugin reads hangs off the static `OriathHub.Core` object. The host
 | `Core.Overlay` | `OriathOverlay` | The ImGui overlay — texture loading and window area. |
 | `Core.OHSettings` | `State` | The host's own settings (treat as read-only from a plugin). |
 | `Core.CurrentAreaLoadedFiles` | `LoadedFiles` | All game files preloaded for the current area. |
-| `Core.Prices` | `PriceService` | Shared, cache-backed item prices. Acquire a league lease before use. |
+| `Core.Prices` | `PriceService` | Shared, cache-backed item prices. Price against the global `Core.Prices.League`. |
 | `Core.CoroutinesRegistrar` | `List<ActiveCoroutine>` | Host-owned diagnostics list for long-lived coroutines. Plugins may add coroutines here when they should appear in host coroutine diagnostics, but they must still keep their own handle and cancel it in `OnDisable`. |
 | `Core.GetVersion()` | `string` | OriathHub version string. |
 
@@ -292,30 +292,56 @@ for (var y = 0; y < flasks.TotalBoxes.Y; y++)
 
 ## Shared item prices
 
-`Core.Prices` owns provider downloads and the per-league disk cache. Consumers hold a lease while enabled;
-multiple plugins requesting the same league share one immutable catalogue and one refresh operation.
+`Core.Prices` owns provider downloads and the per-league disk cache. The economy league is a **global
+host setting** chosen in *App Settings → Basic → poe.ninja Prices*; the host keeps that league's
+catalogue warm. Plugins should price against `Core.Prices.League` and do **not** need to acquire a lease
+for it:
 
 ```csharp
-private IDisposable? priceLease;
-
-public override void OnEnable(bool isGameOpened)
-{
-    priceLease = Core.Prices.Acquire("Standard");
-}
-
-public override void OnDisable()
-{
-    priceLease?.Dispose();
-    priceLease = null;
-}
-
-if (Core.Prices.TryGetPrice(item, "Standard", out var quote))
+var league = Core.Prices.League;   // the global league the user selected
+if (Core.Prices.TryGetPrice(item, league, out var quote))
     ImGui.Text($"{quote.DisplayName}: {quote.ExaltedValue:0.##} ex ({quote.Source})");
 ```
 
 Use `GetStatus(league)`, `GetDivineToExaltedRate(league)`, and `RequestRefresh(league)` for status,
 conversion, and manual refresh. The initial provider is poe.ninja; callers depend on the host contract,
 not provider JSON.
+
+The provider, refresh interval, auto-refresh toggle, and on-disk cache location are also global host
+settings under *App Settings → Basic → poe.ninja Prices* (with a *Clear cache* action). Plugins don't
+manage these — they only read prices for `Core.Prices.League`.
+
+### Pricing without an `Item`
+
+When you don't have a live `Item` entity — items you describe yourself, custom windows, non-inventory
+mechanics — price from a `PriceQuery` instead. Supply the base-item `Path`, `Rarity`, the unique's art
+path (`RenderItem.ResourcePath`, empty if none), and optional stack sizes:
+
+```csharp
+var query = new PriceQuery(
+    Path: "Metadata/Items/Currency/CurrencyRerollRare",
+    Rarity: Rarity.Normal,
+    ArtPath: "",
+    StackCount: 7);
+
+if (Core.Prices.TryGetPrice(in query, Core.Prices.League, out var quote))
+    ImGui.Text($"{quote.DisplayName}: {quote.ExaltedValue:0.##} ex");
+```
+
+`TryGetPrice(Item, …)` is just a convenience wrapper that builds a `PriceQuery` from the item's
+components.
+
+### Pricing a different league (advanced)
+
+To price against a league other than the global one, acquire a lease for it (so its catalogue loads and
+stays cached) and release it in `OnDisable`:
+
+```csharp
+private IDisposable? priceLease;
+
+public override void OnEnable(bool isGameOpened) => priceLease = Core.Prices.Acquire("Hardcore");
+public override void OnDisable() { priceLease?.Dispose(); priceLease = null; }
+```
 
 **`ItemPrice` result:**
 
@@ -924,15 +950,16 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | Member | Type | Description |
 |---|---|---|
 | `IsVisible` | `bool` | Whether the element is currently shown. |
+| `IsValidElement` | `bool` | `false` after a `Refresh` (or address change) where the self-pointer sanity check failed — meaning the address no longer points to a UiElement (e.g. a vendor inventory panel sharing address space with the stash tree, or a torn-frame transient). Check this after calling `Refresh` if you intend to iterate children or read the element's data. The child indexer already returns `null` for cached elements where this is `false`, so most traversal code is naturally protected without an explicit check. |
 | `Position` | `Vector2` | Screen position (top-left corner). |
 | `Size` | `Vector2` | Element size in pixels. |
 | `Scale` | `float` | Cached UI scale-like value exposed for compatibility. Position/size calculations use `Position` and `Size`. |
 | `Flags` | `uint` | Raw UI element flags read from the game. Useful for traversal predicates and diagnostics. |
 | `TotalChildrens` | `int` | Number of child UI elements. The spelling matches the public API. |
 | `TryGetParent(out parent)` | `bool` | Returns the cached parent element if one is available. During transitions this can return `false`. |
-| `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range. Always returns the base type. |
+| `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range or when a previously-cached child has `IsValidElement == false`. Always returns the base type. |
 | `GetChildAddress(index)` | `IntPtr` | Address of the child at `index` without materializing it, or `IntPtr.Zero` if the index is invalid. Uses the already-cached child addresses, so no extra memory read. |
-| `Refresh(reloadChildren = false)` | `void` | Re-reads the element. Pass `true` when a dynamic UI reuses the same child-vector allocation but replaces its pointers in place, such as folder stash subtabs. |
+| `Refresh(reloadChildren = false)` | `void` | Re-reads the element. Pass `true` when a dynamic UI reuses the same child-vector allocation but replaces its pointers in place, such as folder stash subtabs. After a failed Refresh `IsValidElement` will be `false` and `TotalChildrens` will be `0`. |
 
 To wrap a UI element the host does **not** already expose, create a small derived type and pass the raw UI-element address to the protected base constructor:
 
@@ -961,6 +988,18 @@ var visibleLargeChild = UiElementTraversal.FindFirst(
 Traversal uses the currently materialized child collection. For stable trees, the host refresh is enough.
 For a plugin-owned dynamic tree, call `element.Refresh(reloadChildren: true)` before traversing when the UI
 can replace child pointers without reallocating the vector. Do not force-reload large trees unless needed.
+
+When iterating with explicit `Refresh` calls, guard against addresses that are no longer valid UiElements
+(e.g. vendor panels that momentarily share an address with stash UI):
+
+```csharp
+element.Refresh(reloadChildren: true);
+if (!element.IsValidElement)
+    continue; // skip element and its subtree; children are already cleared
+```
+
+The `this[index]` indexer automatically returns `null` for any cached child whose `IsValidElement` is
+`false`, so `UiElementTraversal.BreadthFirst` / `FindFirst` / `FindAll` are safe without an extra check.
 
 When you need child elements as your own derived type, use `GetChildAddress` instead of `this[index]`:
 

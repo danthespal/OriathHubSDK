@@ -17,8 +17,6 @@ namespace OriathHub.Plugins.SampleStashPricing
     /// </summary>
     public sealed class SampleStashPricingPlugin : PluginBase
     {
-        private const string League = "Standard";
-        private IDisposable? priceLease;
         private IDisposable? visibleStashLease;
         private ActiveCoroutine? refreshCoroutine;
         private IReadOnlyList<PricedCell> pricedCells = Array.Empty<PricedCell>();
@@ -38,7 +36,6 @@ namespace OriathHub.Plugins.SampleStashPricing
         /// <inheritdoc />
         public override void OnEnable(bool isGameOpened)
         {
-            this.priceLease = Core.Prices.Acquire(League);
             this.visibleStashLease = ImportantUiElements.RequestVisibleStashItems();
             this.refreshCoroutine = CoroutineHandler.Start(this.RefreshPrices(), "SampleStashPricing.Refresh");
         }
@@ -50,8 +47,6 @@ namespace OriathHub.Plugins.SampleStashPricing
             this.refreshCoroutine = null;
             this.visibleStashLease?.Dispose();
             this.visibleStashLease = null;
-            this.priceLease?.Dispose();
-            this.priceLease = null;
             this.pricedCells = Array.Empty<PricedCell>();
         }
 
@@ -60,14 +55,14 @@ namespace OriathHub.Plugins.SampleStashPricing
         {
             if (ImGui.Button("Refresh shared prices"))
             {
-                Core.Prices.RequestRefresh(League);
+                Core.Prices.RequestRefresh(Core.Prices.League);
             }
         }
 
         /// <inheritdoc />
         public override void DrawUI()
         {
-            var status = Core.Prices.GetStatus(League);
+            var status = Core.Prices.GetStatus(Core.Prices.League);
             if (ImGui.Begin("Sample — Stash Pricing"))
             {
                 ImGui.Text(status.HasData
@@ -117,7 +112,7 @@ namespace OriathHub.Plugins.SampleStashPricing
                 var priced = new List<PricedCell>(cells.Count);
                 foreach (var cell in cells)
                 {
-                    if (Core.Prices.TryGetPrice(cell.Entry.Item, League, out var price))
+                    if (Core.Prices.TryGetPrice(cell.Entry.Item, Core.Prices.League, out var price))
                     {
                         priced.Add(new PricedCell(cell.Element, price));
                     }
