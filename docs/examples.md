@@ -330,7 +330,10 @@ public override void DrawUI()
 
 When the host does not wrap a game component your plugin needs, ship your own wrapper: a `ComponentBase` subclass whose **type name matches the game's component name**, with a `public (IntPtr)` constructor. The host discovers it by reflection when your plugin loads, so any entity can hand it back to you.
 
-The names and offsets below are placeholders. Rename `ExampleComponent` to the component name the game reports — you can read the names an entity exposes via `ComponentRegistry.RegisteredNames` or the host's entity inspector — and replace `ExampleLayout` with the real memory layout you reverse-engineer.
+The names and offsets below are placeholders. Rename `ExampleComponent` to a name from the target entity's
+`ComponentNames` collection (or the host entity inspector), then replace `ExampleLayout` with the real
+memory layout you reverse-engineer. `ComponentRegistry.RegisteredNames` only lists names that already have
+a managed wrapper; it does not list every component present on an entity.
 
 ```csharp
 using OriathHub.RemoteObjects.Components;
@@ -379,7 +382,12 @@ if (entity.TryGetComponent("ExampleComponent", out var comp))
 
 foreach (var name in ComponentRegistry.RegisteredNames)
 {
-    // every component name the host and loaded plugins provide
+    // every component name that currently has a managed wrapper
+}
+
+foreach (var name in entity.ComponentNames)
+{
+    // every component actually present on this entity, including unsupported ones
 }
 ```
 

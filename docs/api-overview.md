@@ -13,6 +13,7 @@ Everything a plugin reads hangs off the static `OriathHub.Core` object. The host
 | `Core.Overlay` | `OriathOverlay` | The ImGui overlay — texture loading and window area. |
 | `Core.OHSettings` | `State` | The host's own settings (treat as read-only from a plugin). |
 | `Core.CurrentAreaLoadedFiles` | `LoadedFiles` | All game files preloaded for the current area. |
+| `Core.Prices` | `PriceService` | Shared, cache-backed item prices. Acquire a league lease before use. |
 | `Core.CoroutinesRegistrar` | `List<ActiveCoroutine>` | Host-owned diagnostics list for long-lived coroutines. Plugins may add coroutines here when they should appear in host coroutine diagnostics, but they must still keep their own handle and cancel it in `OnDisable`. |
 | `Core.GetVersion()` | `string` | OriathHub version string. |
 
@@ -173,6 +174,7 @@ if (entity.TryGetComponent<Render>(out var render))
 | `EntityCustomGroup` | `int` | User-defined group number for POI monsters and special objects. |
 | `CanExplodeOrRemovedFromGame` | `bool` | Host cleanup hint: `true` for entities that can disappear from memory while inside the network bubble. |
 | `ConsecutiveInvalidFrames` | `int` | How many frames in a row this entity has been invalid. |
+| `ComponentNames` | `IReadOnlyCollection<string>` | Snapshot of every game component currently present on the entity, including components with no registered wrapper. |
 
 ### EntityTypes
 
@@ -224,6 +226,10 @@ int dist = entity.DistanceFrom(area.Player);  // in grid units
 // Check whether a monster was (or currently is) a specific subtype
 // Returns true even if the entity was later re-classified to POIMonster
 if (entity.IsOrWasMonsterSubType(EntitySubtypes.PinnacleBoss)) { /* ... */ }
+
+// Discover unsupported components before writing a custom wrapper.
+foreach (var componentName in entity.ComponentNames) { /* inspect name */ }
+if (entity.HasComponent("Life")) { /* present, whether or not it has been materialized */ }
 ```
 
 ---
@@ -260,6 +266,8 @@ foreach (var name in serverData.AvailableInventories)
 | `TotalBoxes` | `StdTuple2D<int>` | Inventory dimensions in slots (`X` columns, `Y` rows). |
 | `ServerRequestCounter` | `int` | Server request counter for this inventory. Useful for detecting inventory refreshes. |
 | `Items` | `ConcurrentDictionary<IntPtr, Item>` | Items keyed by inventory item pointer. |
+| `Entries` | `IReadOnlyList<InventoryEntry>` | Distinct items with authoritative `X`, `Y`, `Width`, and `Height`. |
+| `TryGetEntryAtSlot(x, y, out entry)` | `bool` | Resolves the occupied entry at a logical inventory slot. |
 | `this[y, x]` | `Item` | Item at a zero-based row/column slot. Returns an invalid zero-address item when the slot is empty or out of range. |
 
 `Item` derives from `Entity`. Inventory items use `EntityType.Item` and `EntitySubtype.InventoryItem`, so component access works the same way:
@@ -279,6 +287,56 @@ for (var y = 0; y < flasks.TotalBoxes.Y; y++)
     }
 }
 ```
+
+---
+
+## Shared item prices
+
+`Core.Prices` owns provider downloads and the per-league disk cache. Consumers hold a lease while enabled;
+multiple plugins requesting the same league share one immutable catalogue and one refresh operation.
+
+```csharp
+private IDisposable? priceLease;
+
+public override void OnEnable(bool isGameOpened)
+{
+    priceLease = Core.Prices.Acquire("Standard");
+}
+
+public override void OnDisable()
+{
+    priceLease?.Dispose();
+    priceLease = null;
+}
+
+if (Core.Prices.TryGetPrice(item, "Standard", out var quote))
+    ImGui.Text($"{quote.DisplayName}: {quote.ExaltedValue:0.##} ex ({quote.Source})");
+```
+
+Use `GetStatus(league)`, `GetDivineToExaltedRate(league)`, and `RequestRefresh(league)` for status,
+conversion, and manual refresh. The initial provider is poe.ninja; callers depend on the host contract,
+not provider JSON.
+
+**`ItemPrice` result:**
+
+| Member | Type | Description |
+|---|---|---|
+| `DisplayName` | `string` | Provider-resolved display name, including a matched unique name when available. |
+| `ExaltedValue` | `double` | Total stack value normalized to Exalted Orbs. |
+| `Source` | `string` | Provider that produced the quote. |
+| `UpdatedUtc` | `DateTime` | Timestamp of the immutable catalogue snapshot used for the quote. |
+
+**`PriceServiceStatus` result:**
+
+| Member | Type | Description |
+|---|---|---|
+| `IsLoading` | `bool` | A cache/provider refresh is currently running. |
+| `HasData` | `bool` | At least one usable catalogue snapshot is available. |
+| `UpdatedUtc` | `DateTime` | Timestamp of the available snapshot, or `default` before first load. |
+| `Error` | `string` | Last refresh error; empty when the latest refresh succeeded. Cached data can remain usable after an error. |
+
+See the complete [`SampleStashPricing`](../samples/SampleStashPricing) package consumer for lease cleanup,
+data-phase pricing, status display, and drawing from visible cell geometry.
 
 ---
 
@@ -340,8 +398,9 @@ When a plugin loads, the host reflects over its assembly and registers every suc
 |---|---|
 | `ComponentRegistry.TryResolve(name, out Type)` | Resolve a component name to its registered wrapper type. |
 | `ComponentRegistry.TryCreate(name, address, out ComponentBase)` | Raw factory: resolve and construct a wrapper at an address (does not consult an entity's component list). |
-| `ComponentRegistry.RegisteredNames` | Names of all registered components. |
+| `ComponentRegistry.RegisteredNames` | Names that currently have a managed wrapper registered by the host or a plugin. This is not an entity's component list. |
 | `entity.TryGetComponent(string name, out ComponentBase, shouldCache = true)` | Entity-scoped, name-based component access (the string counterpart of `TryGetComponent<T>`). |
+| `entity.ComponentNames` | Names actually present on this entity, including unsupported components. Use this for discovery. |
 
 ```csharp
 // Resolve and inspect a component by name (e.g. supplied at runtime):
@@ -873,6 +932,7 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `TryGetParent(out parent)` | `bool` | Returns the cached parent element if one is available. During transitions this can return `false`. |
 | `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range. Always returns the base type. |
 | `GetChildAddress(index)` | `IntPtr` | Address of the child at `index` without materializing it, or `IntPtr.Zero` if the index is invalid. Uses the already-cached child addresses, so no extra memory read. |
+| `Refresh(reloadChildren = false)` | `void` | Re-reads the element. Pass `true` when a dynamic UI reuses the same child-vector allocation but replaces its pointers in place, such as folder stash subtabs. |
 
 To wrap a UI element the host does **not** already expose, create a small derived type and pass the raw UI-element address to the protected base constructor:
 
@@ -897,6 +957,10 @@ var visibleLargeChild = UiElementTraversal.FindFirst(
     element => element.IsVisible && element.Size.X > 500f,
     maxDepth: 4);
 ```
+
+Traversal uses the currently materialized child collection. For stable trees, the host refresh is enough.
+For a plugin-owned dynamic tree, call `element.Refresh(reloadChildren: true)` before traversing when the UI
+can replace child pointers without reallocating the vector. Do not force-reload large trees unless needed.
 
 When you need child elements as your own derived type, use `GetChildAddress` instead of `this[index]`:
 
@@ -1043,7 +1107,30 @@ public override void DrawUI()
 }
 ```
 
-> **Controller mode:** Side panels and the world-travel map report `IsVisible = false` in controller mode (gamepad UI offsets are not yet derived). `IsAnyLargePanelOpen` will not catch those panels on a controller.
+Visible stash occupancy is opt-in. `RequestVisibleStashItems()` populates `VisibleStashItems` with the
+cell element, inventory identity, and authoritative `InventoryEntry`. Normal grids and special/folder
+subtabs are resolved by the host. Draw using each cell's own `Position` and `Size`.
+
+```csharp
+private IDisposable? stashLease;
+
+public override void OnEnable(bool isGameOpened)
+{
+    stashLease = ImportantUiElements.RequestVisibleStashItems();
+}
+
+public override void OnDisable()
+{
+    stashLease?.Dispose();
+    stashLease = null;
+}
+
+foreach (var cell in Core.States.InGameStateObject.GameUi.VisibleStashItems)
+    ImGui.GetBackgroundDrawList().AddRect(cell.Element.Position,
+        cell.Element.Position + cell.Element.Size, 0xFFFFFFFF);
+```
+
+> **Controller mode:** Side panels, visible stash cells, and the world-travel map are not resolved yet.
 
 ---
 
@@ -1430,9 +1517,15 @@ if (DatFileReader.TryGetDatTable("Data/Balance/EndgameMapBiomes.dat", out var ta
 
 Convenience readers:
 
+- `BaseItemTypes.TryGet(metadataPath, out BaseItemType itemType)` resolves an entity/item metadata path to `MetadataPath`, localized `Name`, and normalized `ClassName`. The table is cached by the host and cleared when the game closes.
 - `EndgameMapBiomes.TryGetNames(out IReadOnlyList<string> names)` returns biome display names indexed by biome id (the `AtlasMapsNodeUiElement.EndgameMapBiomeId`), cached.
 - `EndgameMapContent.TryGetNames(out IReadOnlyList<string> names)` returns map-content display names (Breach, Expedition, Powerful Map Boss, …) indexed by row id from `EndgameMapContent.dat`, cached. Use it to present a content picker or canonical names; per-node content is on `AtlasMapsNodeUiElement.Content`.
 - `AnimationDat.TryGetName(int animationId, out string name)` returns an animation name from the loaded `Animation.dat` table. Prefer `Actor.AnimationName` unless you already have a raw animation id.
+
+```csharp
+if (BaseItemTypes.TryGet(item.Path, out var baseType))
+    Log.Info($"{baseType.Name} ({baseType.ClassName})", Name);
+```
 
 ---
 

@@ -30,7 +30,7 @@ Reading another process's memory for an online game can carry account risk under
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.4.5" />
+    <PackageReference Include="OriathHub.Sdk" Version="0.7.0" />
   </ItemGroup>
 </Project>
 ```
@@ -84,4 +84,4 @@ Build the plugin and copy the resulting DLL to the host's runtime plugin folder 
 
 The loader scans `Plugins/<FolderName>/<FolderName>*.dll` next to the running `OriathHub.exe`.
 
-See `Sdk/docs/` for the full guide and `Sdk/docs/examples.md` for small examples covering settings, drawing, events, textures, hotkeys, and raw memory reads.
+See `Sdk/docs/` for the full guide and `Sdk/docs/examples.md` for focused snippets. Complete package-consumer projects live under `Sdk/samples/`, including `SampleHelloWorld` and `SampleStashPricing`.

@@ -12,4 +12,7 @@ Build OriathHub plugins against the `OriathHub.Sdk` package. A plugin author nee
 | [API reference](api-overview.md) | Properties and methods exposed by the host: `Core`, entities, components, UI panels, events, drawing, input, and raw memory reads. |
 | [Gotchas](gotchas.md) | Shared assembly rules, deployment requirements, resource cleanup, and reload behavior. |
 
-A complete, commented example lives in [`samples/SampleHelloWorld/`](../samples/SampleHelloWorld).
+Complete package-consumer examples:
+
+- [`samples/SampleHelloWorld/`](../samples/SampleHelloWorld) — lifecycle, settings, entities, and custom reads.
+- [`samples/SampleStashPricing/`](../samples/SampleStashPricing) — inventory entries, visible stash cells, leases, and shared prices.

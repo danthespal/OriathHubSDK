@@ -16,7 +16,7 @@ Consequences:
 
 The SDK package stamps consuming plugin assemblies with `AssemblyMetadata("OriathHubSdkVersion", "...")`. `PluginManager` logs the plugin SDK version and the host SDK version when the plugin loads.
 
-If the major version differs, the loader logs a warning. The plugin may still load, but a major mismatch means the plugin was compiled against a potentially incompatible API surface. Rebuild against the SDK version that matches the host before investigating runtime bugs.
+The loader warns when the major version differs or when a plugin was built against a newer SDK than the host. The plugin may still load, but it can reference APIs the running host does not provide. Rebuild against the SDK version that matches the host before investigating runtime bugs.
 
 ## Adding a third-party dependency
 
