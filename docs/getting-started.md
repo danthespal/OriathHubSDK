@@ -38,7 +38,7 @@ NuGet resolves `OriathHub.Sdk` from that folder when your plugin project referen
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.7.2" />
+    <PackageReference Include="OriathHub.Sdk" Version="0.7.3" />
   </ItemGroup>
 
   <PropertyGroup>

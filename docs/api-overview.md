@@ -1169,6 +1169,30 @@ foreach (var cell in Core.States.InGameStateObject.GameUi.VisibleStashItems)
         cell.Element.Position + cell.Element.Size, 0xFFFFFFFF);
 ```
 
+The player's main inventory panel (right side) works the same way and shares the `VisibleStashItem`
+shape. `RequestVisibleInventoryItems()` populates `VisibleInventoryItems` with the occupied cells in
+the main inventory grid; equipment slots are filtered out. Both leases are reference-counted, so request
+each one your plugin needs in `OnEnable` and dispose them in `OnDisable`.
+
+```csharp
+private IDisposable? inventoryLease;
+
+public override void OnEnable(bool isGameOpened)
+{
+    inventoryLease = ImportantUiElements.RequestVisibleInventoryItems();
+}
+
+public override void OnDisable()
+{
+    inventoryLease?.Dispose();
+    inventoryLease = null;
+}
+
+foreach (var cell in Core.States.InGameStateObject.GameUi.VisibleInventoryItems)
+    ImGui.GetBackgroundDrawList().AddRect(cell.Element.Position,
+        cell.Element.Position + cell.Element.Size, 0xFFFFFFFF);
+```
+
 > **Controller mode:** Side panels, visible stash cells, and the world-travel map are not resolved yet.
 
 ---
