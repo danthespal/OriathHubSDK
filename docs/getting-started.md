@@ -6,21 +6,62 @@ An OriathHub plugin is a .NET class library loaded from the `Plugins` folder nex
 
 - .NET 10 SDK.
 - x64 build output.
-- The distributed `OriathHub.Sdk.<version>.nupkg` file.
 - An OriathHub host build or install for runtime testing.
 
-Put the `.nupkg` file you were given in a local folder and register that folder as a NuGet source:
+## SDK package setup
+
+Each plugin repository ships the `OriathHub.Sdk` NuGet package as a committed file so anyone — including the Plugins Marketplace on a new machine — can build it without any extra setup.
+
+**Structure every plugin repo uses:**
+
+```
+MyPlugin/
+  SDK/
+    OriathHub.Sdk.<version>.nupkg   ← committed to git
+  nuget.config
+  MyPlugin.csproj
+  MyPlugin.cs
+```
+
+**`nuget.config`** — register the local feed, then re-add nuget.org:
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
-    <add key="oriathhub" value="C:\oriathhub-sdk" />
+    <clear />
+    <add key="oriathhub-sdk" value="SDK" />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
   </packageSources>
 </configuration>
 ```
 
-NuGet resolves `OriathHub.Sdk` from that folder when your plugin project references the package. Use the package version distributed with the OriathHub build you are targeting.
+To obtain the `.nupkg`: grab it from an OriathHub release zip (it ships in `Sdk/`) or run `pwsh ./Sdk/build-sdk.ps1` from the OriathHub source tree. Copy it into your plugin's `SDK/` and commit it.
+
+If your `.gitignore` contains a broad `*.nupkg` rule, un-ignore this specific path:
+
+```gitignore
+!SDK/*.nupkg
+```
+
+Use the package version matching the OriathHub build you target. When you update the SDK version, replace the `.nupkg` in `SDK/` and commit the new file.
+
+## Plugins Marketplace readiness
+
+The in-app Plugins Marketplace can build and install a plugin straight from its Git repository, but only when the repo passes a few structural checks. A plugin that fails them is shown as *not ready to build*. Make sure your repo has all of the following:
+
+- A `PackageReference` to `OriathHub.Sdk` in the plugin `.csproj`.
+- The SDK package committed at `SDK/OriathHub.Sdk.*.nupkg` — directly inside the `SDK/` folder, not a nested subfolder.
+- `<TargetFramework>net10.0-windows</TargetFramework>`.
+- A post-build `CopyToHostPluginsDir` target that references `OriathHubDir` (the project template below has one).
+
+These are the same pieces the manual setup already produces; the list is just what the Marketplace verifies before offering a one-click build.
+
+## Distributing a closed-source plugin (release ZIP)
+
+If you don't want to publish your source, ship the **compiled** plugin as a `.zip` attached to a GitHub Release instead. The Marketplace auto-detects this — when the repo a user pastes has a latest release carrying a `.zip` asset, it downloads and extracts that release directly instead of cloning and building, so the user never needs the .NET SDK.
+
+See [Distributing as a release ZIP](distributing-as-release.md) for the full setup (GitHub repo, ZIP layout, release tag, and updates).
 
 ## 1. Create the project
 
@@ -38,7 +79,7 @@ NuGet resolves `OriathHub.Sdk` from that folder when your plugin project referen
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.7.3" />
+    <PackageReference Include="OriathHub.Sdk" Version="0.10.0" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -76,6 +76,7 @@ string areaName = Core.States.AreaLoading.CurrentAreaName;
 | `AwakeEntities` | `ConcurrentDictionary<EntityKey, Entity>` | All awake (interactive) entities — monsters, chests, players, NPCs, shrines. |
 | `EntitiesAddedThisFrame` | `IReadOnlyList<Entity>` | Entities that appeared this frame. Empty on zone-change frames. |
 | `EntitiesRemovedThisFrame` | `IReadOnlyList<Entity>` | Entities removed this frame (last-known state). Empty on zone-change frames. |
+| `GetAwakeEntitiesSnapshot()` | `IReadOnlyList<Entity>` | Point-in-time copy of `AwakeEntities`. Use it to discover entities that already exist when your plugin starts observing — present at zone-in, or already awake when the plugin is enabled/reloaded mid-area — which the per-frame delta lists never report. |
 | `ServerDataObject` | `ServerData` | Player progression and inventory pointers. |
 | `CurrentAreaLevel` | `int` | Monster level of the current area. |
 | `AreaHash` | `string` | Unique hex hash for this area instance. |
@@ -105,7 +106,7 @@ foreach (var entity in area.EntitiesRemovedThisFrame)
     Log.Info($"removed: {entity.Path}", Name);
 ```
 
-> Both delta lists are empty on the zone-change frame — a transition is a bulk reset, not per-entity churn. Use `RemoteEvents.AreaChanged` to react to zone changes.
+> Both delta lists are empty on the zone-change frame — a transition is a bulk reset, not per-entity churn, so use `RemoteEvents.AreaChanged` to react to zone changes. They are also pure per-frame deltas: on their own they never report entities that were already alive before your plugin started observing (present at zone-in, or already awake when the plugin is enabled or reloaded mid-area). Seed that initial set once from `GetAwakeEntitiesSnapshot()` — in `OnEnable` and on `RemoteEvents.AreaChanged` — then follow later arrivals through `EntitiesAddedThisFrame`.
 
 **`TerrainInfo` properties:**
 
@@ -490,7 +491,8 @@ Animation state and active skill data for monsters and players.
 | `AnimationName` | `string` | Current animation name resolved from the game's loaded `Animation.dat`, with enum fallback when unavailable. |
 | `Animation` | `Animation` (enum) | `[Obsolete]` (emits a build warning) compatibility fallback for older plugins. Prefer `AnimationId` or `AnimationName`; the enum can become stale when `Animation.dat` rows shift. |
 | `ActiveSkills` | `Dictionary<string, ActiveSkillInfo>` | All known active skills, keyed by skill name. |
-| `IsSkillUsable` | `HashSet<string>` | Names of skills currently off cooldown and usable. |
+| `IsSkillUsable` | `HashSet<string>` | Names of skills currently off cooldown and usable. For most use-cases this is all you need; for per-skill cooldown details see `ActiveSkillCooldowns`. |
+| `ActiveSkillCooldowns` | `Dictionary<uint, ActiveSkillCooldownInfo>` | Per-skill cooldown records, keyed by the packed skill/equipment id (`ActiveSkillCooldownInfo.SkillKey`). Matches the `UnknownIdAndEquipmentInfo` key in `ActiveSkillInfo`. |
 | `DeployedEntities` | `int[256]` | Per-type count of deployed objects (totems, mines, minions …). Index is the deployed-object type ID. |
 
 **`ActiveSkillInfo` properties:**
@@ -502,11 +504,22 @@ Animation state and active skill data for monsters and players.
 | `ActiveSkillsDatId` | `uint` | Row ID in ActiveSkills.dat. |
 | `TotalCooldownTimeInMs` | `int` | Cooldown duration in milliseconds. |
 | `TotalUses` | `int` | Total number of times the skill has been used this session. |
-| `UnknownIdAndEquipmentInfo` | `uint` | Packed gem socket / equipment info. |
+| `UnknownIdAndEquipmentInfo` | `uint` | Packed gem socket / equipment info. Use as the key into `Actor.ActiveSkillCooldowns`. |
 | `GrantedEffectsDatRow` | `IntPtr` | Pointer to the GrantedEffects.dat row. |
 | `GrantedEffectsPerLevelDatRow` | `IntPtr` | Pointer to the GrantedEffectsPerLevel.dat row. |
 | `ActiveSkillsDatPtr` | `IntPtr` | Pointer to the ActiveSkills.dat row/data block. |
 | `GrantedEffectStatSetsPerLevelDatRow` | `IntPtr` | Pointer to the granted-effect stat set row. |
+
+**`ActiveSkillCooldownInfo` properties:**
+
+| Member | Type | Description |
+|---|---|---|
+| `SkillKey` | `uint` | Packed skill/equipment id — matches `ActiveSkillInfo.UnknownIdAndEquipmentInfo`. |
+| `ActiveSkillsDatId` | `int` | Row ID in ActiveSkills.dat for this cooldown record. |
+| `MaxUses` | `int` | Maximum simultaneous uses before the skill enters cooldown. |
+| `TotalCooldownTimeInMs` | `int` | Full cooldown duration in milliseconds. |
+| `TotalActiveCooldowns` | `int` | Number of currently active (unexpired) cooldown instances. |
+| `CannotBeUsed` | `bool` | `true` when all uses are on cooldown (`TotalActiveCooldowns >= MaxUses`). Equivalent to the logic behind `IsSkillUsable`. |
 
 ```csharp
 if (entity.TryGetComponent<Actor>(out var actor))
@@ -518,6 +531,13 @@ if (entity.TryGetComponent<Actor>(out var actor))
         Log.Info($"cooldown: {skill.TotalCooldownTimeInMs} ms", Name);
 
     bool canUse = actor.IsSkillUsable.Contains("Ice Strike");
+
+    // Per-skill cooldown detail
+    if (actor.ActiveSkills.TryGetValue("Ice Strike", out var iceStrike) &&
+        actor.ActiveSkillCooldowns.TryGetValue(iceStrike.UnknownIdAndEquipmentInfo, out var cd))
+    {
+        Log.Info($"active cooldowns: {cd.TotalActiveCooldowns}/{cd.MaxUses}", Name);
+    }
 }
 ```
 
@@ -637,6 +657,7 @@ Like `ObjectMagicProperties` but for items (ground drops, inventory items). Mods
 | `ExplicitMods` | `List<(string, (float, float))>` | Explicit (rolled) mods. |
 | `EnchantMods` | `List<(string, (float, float))>` | Enchantment mods. |
 | `HellscapeMods` | `List<(string, (float, float))>` | Crucible / hellscape mods. |
+| `ModStats` | `Dictionary<GameStats, int>` | Stats granted by the item's mods (same shape as `ObjectMagicProperties.ModStats`). Only populated when the component address first changes (i.e. when the item is first seen). |
 
 ```csharp
 if (entity.TryGetComponent<Mods>(out var mods))
@@ -657,7 +678,8 @@ Numeric stat values, split by source.
 | `StatsChangedByItems` | `Dictionary<GameStats, int>` | Stats from equipped items. |
 | `StatsChangedByBuffAndActions` | `Dictionary<GameStats, int>` | Stats from buffs and skills. |
 | `CurrentWeaponIndex` | `int` | Active weapon set (0 = weapon I, 1 = weapon II). |
-| `IsInShapeshiftedForm` | `bool` | `true` if the entity is shapeshifted. |
+| `IsInShapeshiftedForm` | `bool` | `true` if the entity is currently in a shapeshifted form. |
+| `ShapeshiftFormsDatRow` | `IntPtr` | Pointer to the active `ShapeshiftForms.dat` row, or `IntPtr.Zero` when not shapeshifted. Use this to identify which form is active via a raw read. |
 
 `GameStats` is a large enum in `OriathHub.RemoteEnums`. Browse it in your IDE for the full list of stat IDs.
 
@@ -702,6 +724,7 @@ State of a chest entity.
 |---|---|---|
 | `IsOpened` | `bool` | `true` if the chest has been opened. |
 | `IsStrongbox` | `bool` | `true` if this is a strongbox. |
+| `StrongboxDatRow` | `IntPtr` | Pointer to the `StrongboxTypes.dat` row for this chest, or `IntPtr.Zero` when it is not a strongbox. Use this for a raw read of strongbox-type metadata. |
 | `IsLabelVisible` | `bool` | `true` if the chest label is visible (breach/legion/normal chests). |
 
 ```csharp
@@ -745,12 +768,27 @@ if (entity.TryGetComponent<MinimapIcon>(out var icon) && icon.IconName != null)
 
 | Member | Type | Description |
 |---|---|---|
-| `IsTargetable` | `bool` | `true` if the entity can currently be targeted by the player. Combines all internal flags. |
+| `IsTargetable` | `bool` | `true` if the entity can currently be targeted by the player. Combines all flags below into one predicate. |
+| `IsHighlightable` | `bool` | Raw highlight flag. Note: non-highlightable entities can still be targetable. |
+| `IsTargettedByPlayer` | `bool` | `true` while the player's cursor is actively targeting this entity. |
+| `HiddenfromPlayer` | `bool` | `true` when the entity is hidden from the player (contributes `false` to the combined `IsTargetable`). |
+| `NeedsTrue` | `bool` | Internal flag that must be `true` for the entity to be targetable. |
+| `MeetsQuestState` | `bool` | `true` when the entity's quest-state requirement is satisfied. |
+| `NeedsFalse` | `bool` | Internal flag that must be `false` for the entity to be targetable. |
+
+`IsTargetable` is equivalent to `IsTargetable && !HiddenfromPlayer && NeedsTrue && MeetsQuestState && !NeedsFalse`. The individual flags are useful for debugging why a specific entity is not selectable.
 
 ```csharp
 if (entity.TryGetComponent<Targetable>(out var targetable) && targetable.IsTargetable)
 {
     // entity is interactable
+}
+
+// Debug why an entity is not targetable
+if (entity.TryGetComponent<Targetable>(out var t) && !t.IsTargetable)
+{
+    Log.Info($"hidden={t.HiddenfromPlayer} needsTrue={t.NeedsTrue} " +
+             $"questOk={t.MeetsQuestState} needsFalse={t.NeedsFalse}", Name);
 }
 ```
 

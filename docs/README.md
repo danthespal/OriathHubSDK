@@ -7,6 +7,7 @@ Build OriathHub plugins against the `OriathHub.Sdk` package. A plugin author nee
 | Guide | What it covers |
 |---|---|
 | [Getting started](getting-started.md) | Create a plugin project, write your first class, build and install. |
+| [Distributing as a release ZIP](distributing-as-release.md) | Ship a closed-source plugin as a GitHub Release `.zip` that installs from the Marketplace with no build. |
 | [Plugin lifecycle](plugin-lifecycle.md) | When each `PluginBase` method runs, how to write settings, and how to use coroutines. |
 | [Plugin examples](examples.md) | Small, focused examples for common plugin tasks. |
 | [API reference](api-overview.md) | Properties and methods exposed by the host: `Core`, entities, components, UI panels, events, drawing, input, and raw memory reads. |

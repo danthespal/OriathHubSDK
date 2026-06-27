@@ -30,7 +30,7 @@ Reading another process's memory for an online game can carry account risk under
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.7.2" />
+    <PackageReference Include="OriathHub.Sdk" Version="0.10.0" />
   </ItemGroup>
 </Project>
 ```

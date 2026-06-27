@@ -510,3 +510,132 @@ The loader finds `Plugins/<FolderName>/<FolderName>*.dll` next to the running `O
 ```
 
 If you add a NuGet dependency that is not already part of OriathHub, set `<EnableDynamicLoading>true</EnableDynamicLoading>` in your plugin project so runtime assemblies are copied to your output, then include those DLLs in the copy target.
+
+## Discover entities already present, then track new ones
+
+`EntitiesAddedThisFrame` is a per-frame delta — it never includes entities that were already awake before your plugin started observing (the spawn bubble at zone-in, or anything already present when the plugin is enabled or reloaded mid-area). Seed the initial set once from `GetAwakeEntitiesSnapshot()`, then keep up with the delta. The dictionary key dedups entities the snapshot and the delta both surface.
+
+```csharp
+using Coroutine;
+using OriathHub.CoroutineEvents;
+using OriathHub.RemoteEnums.Entity;
+using OriathHub.RemoteObjects.States.InGameStateObjects; // Entity
+using System.Collections.Generic;
+
+private readonly Dictionary<uint, Entity> tracked = new();
+private ActiveCoroutine? deltaCoroutine;
+private ActiveCoroutine? areaCoroutine;
+
+public override void OnEnable(bool isGameOpened)
+{
+    SeedFromSnapshot(); // catch entities already present in the current area
+    deltaCoroutine = CoroutineHandler.Start(TrackDelta(), "MyPlugin.TrackDelta");
+    areaCoroutine = CoroutineHandler.Start(OnAreaChanged(), "MyPlugin.AreaChanged");
+}
+
+public override void OnDisable()
+{
+    deltaCoroutine?.Cancel();
+    areaCoroutine?.Cancel();
+    deltaCoroutine = areaCoroutine = null;
+    tracked.Clear();
+}
+
+private void SeedFromSnapshot()
+{
+    if (Core.States.GameCurrentState != GameStateTypes.InGameState) return;
+    foreach (var entity in Core.States.InGameStateObject.CurrentAreaInstance.GetAwakeEntitiesSnapshot())
+        Consider(entity);
+}
+
+private IEnumerator<Wait> OnAreaChanged()
+{
+    while (true)
+    {
+        yield return new Wait(RemoteEvents.AreaChanged);
+        tracked.Clear();
+        SeedFromSnapshot(); // entities already present at zone-in
+    }
+}
+
+private IEnumerator<Wait> TrackDelta()
+{
+    while (true)
+    {
+        yield return new Wait(OriathEvents.PerFrameDataUpdate);
+        if (Core.States.GameCurrentState != GameStateTypes.InGameState) continue;
+        foreach (var entity in Core.States.InGameStateObject.CurrentAreaInstance.EntitiesAddedThisFrame)
+            Consider(entity); // later arrivals
+    }
+}
+
+private void Consider(Entity entity)
+{
+    if (entity.EntityType == EntityTypes.Monster && !tracked.ContainsKey(entity.Id))
+        tracked[entity.Id] = entity;
+}
+```
+
+## Read atlas map nodes (biomes and content)
+
+`GameUi.AtlasMapsNodesUiElements` is empty unless your plugin holds a lease (the host skips the per-frame node enumeration otherwise). Request it in `OnEnable`, dispose it in `OnDisable`, then read each node's name, biome, and rolled content. Biome names come from `EndgameMapBiomes`, indexed by `EndgameMapBiomeId`; the content names are already resolved on the node.
+
+```csharp
+using Coroutine;
+using OriathHub.RemoteObjects.FilesStructures; // EndgameMapBiomes
+using OriathHub.RemoteObjects.UiElement;       // ImportantUiElements
+using System;
+using System.Numerics;
+
+private IDisposable? atlasLease;
+
+public override void OnEnable(bool isGameOpened)
+{
+    this.atlasLease = ImportantUiElements.RequestAtlasMapNodes();
+}
+
+public override void OnDisable()
+{
+    this.atlasLease?.Dispose();
+    this.atlasLease = null;
+}
+
+public override void DrawUI()
+{
+    if (Core.States.GameCurrentState != GameStateTypes.InGameState) return;
+
+    var gameUi = Core.States.InGameStateObject.GameUi;
+    if (!gameUi.IsAtlasMapOpen) return;
+
+    EndgameMapBiomes.TryGetNames(out var biomeNames);
+    var draw = ImGui.GetForegroundDrawList();
+
+    foreach (var node in gameUi.AtlasMapsNodesUiElements)
+    {
+        if (!node.IsVisible || node.IsCompleted) continue;
+
+        var biome = node.EndgameMapBiomeId < biomeNames.Count
+            ? biomeNames[node.EndgameMapBiomeId]
+            : "?";
+        var content = node.Content.Count > 0 ? string.Join(", ", node.Content) : "—";
+
+        draw.AddText(node.Position, 0xFFFFFFFF, $"{node.MapName} [{biome}] {content}");
+    }
+}
+```
+
+## Resolve item names from `.dat` tables
+
+When the host wrapper does not give you a readable name, resolve it from a loaded data file. `BaseItemTypes` maps an entity/item metadata path to its localized base name and class; the table is read from game memory once and cached for the session.
+
+```csharp
+using OriathHub.RemoteObjects.FilesStructures; // BaseItemTypes
+
+private void LogItemName(Entity item)
+{
+    if (BaseItemTypes.TryGet(item.Path, out var baseType))
+        Log.Info($"{baseType.Name} ({baseType.ClassName})", Name);
+}
+```
+
+For a table the host does not wrap with a convenience reader, resolve the row block yourself with `DatFileReader.TryGetDatTable(path, out var table)` and read each row by its `GameOffsets`-specific size and column offsets. See [API reference → Reading `.dat`/`.datc64` tables by name](api-overview.md#reading-datdatc64-tables-by-name).

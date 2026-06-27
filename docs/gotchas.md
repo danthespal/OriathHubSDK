@@ -109,6 +109,8 @@ For normal releases, the SDK package version should change when the plugin-facin
 
 `EntitiesAddedThisFrame` and `EntitiesRemovedThisFrame` are both empty on the frame a zone transition is detected because the area dictionary is bulk-cleared rather than drained one entity at a time.
 
+They are also pure per-frame deltas: on their own they never report entities that were already alive before your plugin started observing — present in the spawn bubble at zone-in, or already awake when the plugin is enabled or reloaded mid-area. Seed that initial set from `AreaInstance.GetAwakeEntitiesSnapshot()` once (in `OnEnable` and on `RemoteEvents.AreaChanged`), then follow later arrivals through `EntitiesAddedThisFrame`.
+
 Use `RemoteEvents.AreaChanged` to reset per-area caches.
 
 ## `*Required` reads on hot paths
