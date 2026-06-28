@@ -1237,7 +1237,7 @@ foreach (var cell in Core.States.InGameStateObject.GameUi.VisibleInventoryItems)
 
 ## Coroutine events
 
-Subscribe in a coroutine started from `OnEnable`. Cancel it in `OnDisable`. These are the events a plugin can wait on (all in `OriathHub.CoroutineEvents`):
+Subscribe in a coroutine started from `OnEnable`. Start it with `StartCoroutine(...)` (on `PluginBase`) so the host force-cancels it on disable/reload/unload even if `OnDisable` is skipped or throws; you may also cancel your own handle in `OnDisable` for immediate teardown. These are the events a plugin can wait on (all in `OriathHub.CoroutineEvents`):
 
 | Event | Class | When it fires |
 |---|---|---|
@@ -1259,7 +1259,7 @@ private ActiveCoroutine? areaCoroutine;
 
 public override void OnEnable(bool isGameOpened)
 {
-    areaCoroutine = CoroutineHandler.Start(OnAreaChange(), "MyPlugin.AreaChange");
+    areaCoroutine = StartCoroutine(OnAreaChange(), "MyPlugin.AreaChange");
 }
 
 public override void OnDisable()

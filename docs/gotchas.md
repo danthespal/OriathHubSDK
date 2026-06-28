@@ -12,6 +12,18 @@ Consequences:
 - Do not copy the shared SDK dependencies (`ImGuiNET`, `ClickableTransparentOverlay`, `Coroutine`, `Newtonsoft.Json`, `SixLabors.ImageSharp`) unless you have a specific versioning problem and know how it will resolve at runtime.
 - Treat `Core.OHSettings` as host-owned. Read it when needed, but store plugin settings in your own file under `DllDirectory`.
 
+## Trust model — plugins run with full access
+
+There is no sandbox. A plugin loads into the host process as ordinary full-trust .NET code, so it can do anything the process can: read and write any file, open network connections, start other processes, call native APIs, and open the game process with **write** access. The SDK reference assemblies only narrow what you can reference *at compile time*; at runtime your plugin binds to the host's real, full `OriathHub.dll`, and nothing — including the host's `internal` types and the licensing code — is actually unreachable (reflection ignores accessibility in full trust).
+
+What this means in practice:
+
+- The host's "external, read-only" guarantee covers the host's own behavior. It does **not** extend to plugins. If a plugin writes to or injects into the game, that is on the plugin and carries the same account-ban risk the host avoids.
+- Installing a plugin is equivalent to running an unsigned program from its author. Users should only install plugins from authors they trust, from source they can inspect.
+- Do not treat the compile-time reference surface as a security boundary in your own design.
+
+Author responsibly: keep your plugin to reads through the documented `Core` facade, and never open the game with write access.
+
 ## SDK version stamps
 
 The SDK package stamps consuming plugin assemblies with `AssemblyMetadata("OriathHubSdkVersion", "...")`. `PluginManager` logs the plugin SDK version and the host SDK version when the plugin loads.
@@ -38,6 +50,67 @@ Then include those DLLs in your deployment target:
 ```
 
 Avoid unmanaged/native dependencies when possible. If you need one, test reload and startup carefully because native load/unload behavior is less forgiving.
+
+## Multi-project plugins (a shared library alongside the plugin)
+
+A plugin can be more than one project — e.g. a thin `MyPlugin.csproj` plus a `MyPlugin.Common.csproj` shared library. This is fully supported:
+
+- **At runtime**, the loader picks the main `Plugins/<FolderName>/<FolderName>*.dll` (the one with your `sealed PluginBase`) and resolves any other DLLs in that same folder as dependencies. So shipping a sidecar like `MyPlugin.Common.dll` beside your plugin DLL just works.
+- **In the Marketplace**, a source repo with several `.csproj` files builds fine. The Marketplace selects the project whose file name matches the repo/folder name as the one to build (and shows a picker so a user can override it); that project's `ProjectReference`s are compiled in as usual. There is no "single project" requirement.
+
+The only thing you must get right is **deployment** — your build has to land every DLL the plugin needs in the host folder, and **only** those. The default copy target ships just your own `<TargetName>.dll`, so a separate sidecar would be left behind and the plugin would fail to load at runtime. Pick one of two patterns:
+
+**A. Merge into a single DLL (simplest).** Use [ILRepack](https://github.com/gluck/il-repack) (`ILRepack.Lib.MSBuild.Task`) to fold your library project(s) into the plugin DLL at build time. There is then exactly one DLL to deploy and nothing else to manage. This is what the `AutoLoot` plugin does. Add the package reference and a merge target that runs after build but **before** your deploy target, so the copy step ships the already-merged DLL:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.34" />
+</ItemGroup>
+
+<!-- Fold MyPlugin.Common.dll into the plugin DLL, then drop the now-redundant standalone copy. -->
+<Target Name="ILRepackPlugin" AfterTargets="Build" BeforeTargets="CopyToHostPluginsDir">
+  <PropertyGroup>
+    <_CommonDll>$(OutputPath)MyPlugin.Common.dll</_CommonDll>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(_CommonDll)')">
+    <_RepackInput Include="$(TargetPath)" />   <!-- your plugin DLL -->
+    <_RepackInput Include="$(_CommonDll)" />   <!-- the library to fold in -->
+    <_RepackLibDirs Include="$(OutputPath)" />
+    <!-- Let ILRepack *resolve* (not merge) any host-shared package the library references.
+         Add one line per such package — here, Newtonsoft.Json: -->
+    <_RepackLibDirs Include="@(ReferencePathWithRefAssemblies)" Condition="'%(Filename)' == 'Newtonsoft.Json'" />
+  </ItemGroup>
+  <ILRepack Condition="Exists('$(_CommonDll)')"
+            Parallel="true"
+            Internalize="true"
+            InputAssemblies="@(_RepackInput)"
+            OutputFile="$(TargetPath)"
+            TargetKind="Dll"
+            LibraryPath="@(_RepackLibDirs->'%(RootDir)%(Directory)')" />
+  <Delete Condition="Exists('$(_CommonDll)')" Files="$(_CommonDll)" />
+  <Delete Condition="Exists('$(_CommonDll).pdb')" Files="$(_CommonDll).pdb" />
+</Target>
+```
+
+`Internalize="true"` keeps the merged library's types private to your plugin so they can't collide with another plugin's. With this in place there is a single `MyPlugin.dll` to deploy, so the default copy target needs no changes.
+
+**B. Copy your private DLLs explicitly.** Keep them separate and list each one in your deploy target, exactly as for a [third-party dependency](#adding-a-third-party-dependency):
+
+```xml
+<Target Name="CopyToHostPluginsDir" AfterTargets="Build" Condition="Exists('$(OriathHubDir)')">
+  <ItemGroup>
+    <PluginFiles Include="$(OutDir)$(TargetName)$(TargetExt)" />
+    <PluginFiles Include="$(OutDir)MyPlugin.Common.dll" />
+  </ItemGroup>
+  <Copy SourceFiles="@(PluginFiles)"
+        DestinationFolder="$(OriathHubDir)\Plugins\$(AssemblyName)"
+        SkipUnchangedFiles="true" />
+</Target>
+```
+
+**Never deploy a host-shared assembly this way.** List only your *own* private DLLs. Copying `OriathHub.dll`, `GameOffsets.dll`, `ImGuiNET`, `Coroutine`, `Newtonsoft.Json`, or `SixLabors.ImageSharp` into your plugin folder makes the loader bind a *second* copy from that folder, and your plugin's types stop being identical to the host's — see [Shared assemblies](#shared-assemblies). Pattern A sidesteps this because ILRepack merges only the assemblies you point it at.
+
+For a release-ZIP plugin, the same rule applies to the zip: include your main DLL plus your private sidecars, and no host-shared assemblies.
 
 ## Discovery rules
 

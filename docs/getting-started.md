@@ -57,6 +57,8 @@ The in-app Plugins Marketplace can build and install a plugin straight from its 
 
 These are the same pieces the manual setup already produces; the list is just what the Marketplace verifies before offering a one-click build.
 
+A repo with more than one `.csproj` (e.g. a plugin plus a shared library project) is supported — the Marketplace builds the project whose name matches the repo and lets you pick a different one. Just make sure your build deploys every DLL the plugin needs; see [Multi-project plugins](gotchas.md#multi-project-plugins-a-shared-library-alongside-the-plugin) in Gotchas.
+
 ## Distributing a closed-source plugin (release ZIP)
 
 If you don't want to publish your source, ship the **compiled** plugin as a `.zip` attached to a GitHub Release instead. The Marketplace auto-detects this — when the repo a user pastes has a latest release carrying a `.zip` asset, it downloads and extracts that release directly instead of cloning and building, so the user never needs the .NET SDK.

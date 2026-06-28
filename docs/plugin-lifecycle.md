@@ -119,7 +119,9 @@ public override void SaveSettings()
 
 OriathHub uses the [`Coroutine`](https://www.nuget.org/packages/Coroutine) scheduler on the render thread. A plugin can start coroutines that wait on public host events, such as an area change.
 
-Keep the returned `ActiveCoroutine` and cancel it in `OnDisable`. You may add long-lived coroutines to `Core.CoroutinesRegistrar` if you want them visible in host coroutine diagnostics, but registration is not what keeps them alive. The handle and cancellation are the important parts.
+Prefer **`StartCoroutine(...)`** (defined on `PluginBase`) over calling `CoroutineHandler.Start(...)` directly. A coroutine started through `StartCoroutine` is tied to your plugin's lifetime: the host force-cancels it when your plugin is disabled, reloaded, or unloaded — even if your `OnDisable` forgets to cancel it or throws partway through. A coroutine left running against an unloaded plugin throws every frame and pins your collectible load context, defeating hot-reload. If you started a coroutine another way (e.g. an event-based overload), pass its handle to **`TrackCoroutine(...)`** to get the same managed cancellation.
+
+You can still cancel your own handle in `OnDisable` for immediate teardown; doing both is harmless. You may also add long-lived coroutines to `Core.CoroutinesRegistrar` if you want them visible in host coroutine diagnostics, but registration there is not what keeps them alive or cancels them.
 
 ```csharp
 using Coroutine;
@@ -131,11 +133,13 @@ private ActiveCoroutine? areaChangeCoroutine;
 public override void OnEnable(bool isGameOpened)
 {
     settings = JsonHelper.CreateOrLoadJsonFile<MyPluginSettings>(SettingsFile);
-    areaChangeCoroutine = CoroutineHandler.Start(OnAreaChange(), "MyPlugin.AreaChange");
+    // Host-managed: cancelled automatically on disable/reload/unload.
+    areaChangeCoroutine = StartCoroutine(OnAreaChange(), "MyPlugin.AreaChange");
 }
 
 public override void OnDisable()
 {
+    // Optional — the host also cancels tracked coroutines for you.
     areaChangeCoroutine?.Cancel();
     areaChangeCoroutine = null;
     // free textures here too

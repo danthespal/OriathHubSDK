@@ -51,12 +51,14 @@ namespace OriathHub.Plugins.SampleHelloWorld
         {
             settings = JsonHelper.CreateOrLoadJsonFile<SampleHelloWorldSettings>(SettingsFile);
             Log.Info("enabled", this.Name);
-            areaChangeCoroutine = CoroutineHandler.Start(LogAreaChanges(), "SampleHelloWorld.AreaChange");
+            // StartCoroutine (on PluginBase) ties the coroutine to this plugin's lifetime: the host
+            // force-cancels it on disable/reload/unload even if OnDisable is skipped or throws.
+            areaChangeCoroutine = StartCoroutine(LogAreaChanges(), "SampleHelloWorld.AreaChange");
 
             // Reference pattern: a custom memory object the host does not track, refreshed from the
             // PerFrameDataUpdate event so the read happens during the data phase, not while drawing.
             playerProbe = new PlayerProbe();
-            playerProbeCoroutine = CoroutineHandler.Start(RefreshPlayerProbe(), "SampleHelloWorld.PlayerProbe");
+            playerProbeCoroutine = StartCoroutine(RefreshPlayerProbe(), "SampleHelloWorld.PlayerProbe");
         }
 
         /// <inheritdoc/>
