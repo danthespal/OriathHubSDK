@@ -1160,6 +1160,55 @@ if (minimap.IsVisible)
     ImGui.Text($"minimap zoom: {minimap.Zoom:0.00}");
 ```
 
+**Projecting entities onto the large/mini map — `LargeMapHelper`:**
+
+Drawing world entities on the LargeMap (or MiniMap) needs an empirically-derived isometric
+projection plus an aspect-ratio scale correction. `OriathHub.RemoteObjects.UiElement.LargeMapHelper`
+exposes that math so plugins don't have to re-derive it. All methods are stateless — pass the
+current map diagonal and scale on every call.
+
+| Member | Description |
+|---|---|
+| `ComputeAutoScale(int width, int height, float uiScale = 1f)` | Aspect-ratio scale-fix multiplier for the large map. Multiply the LargeMap zoom by it to keep icons stable while moving. |
+| `GridDeltaToMapPixels(Vector2 gridDelta, float terrainHeightDelta, double diagonalLength, float scale)` | Converts an entity-to-player grid delta into a pixel delta from the map center. |
+| `CameraAngle` / `WorldToGridHeightFactor` / `MapScaleDivisor` | The constants behind the transform, exposed for advanced use. |
+
+```csharp
+var largeMap = Core.States.InGameStateObject.GameUi.LargeMap;
+if (largeMap.IsVisible)
+{
+    var center = largeMap.Center + largeMap.Shift + largeMap.DefaultShift;
+    var size = largeMap.Size;
+    var diagonal = Math.Sqrt((size.X * size.X) + (size.Y * size.Y));
+
+    var window = Core.Process.WindowArea;
+    var scale = LargeMapHelper.ComputeAutoScale(window.Width, window.Height) * largeMap.Zoom;
+
+    var player = Core.States.InGameStateObject.CurrentAreaInstance.Player;
+    if (player.TryGetComponent<Render>(out var pRender))
+    {
+        foreach (var e in /* entities to draw */)
+        {
+            if (!e.TryGetComponent<Render>(out var eRender))
+                continue;
+
+            // GridPosition is a StdTuple3D<float> (no Vector2 conversion / operator-), so build the
+            // 2D grid delta from its X/Y components explicitly.
+            var pg = pRender.GridPosition;
+            var eg = eRender.GridPosition;
+            var gridDelta = new Vector2(eg.X - pg.X, eg.Y - pg.Y);
+
+            var delta = LargeMapHelper.GridDeltaToMapPixels(
+                gridDelta,
+                eRender.TerrainHeight - pRender.TerrainHeight,
+                diagonal,
+                scale);
+            ImGui.GetWindowDrawList().AddCircleFilled(center + delta, 4f, 0xFF00FF00);
+        }
+    }
+}
+```
+
 **Chat element:**
 
 ```csharp
@@ -1231,7 +1280,12 @@ foreach (var cell in Core.States.InGameStateObject.GameUi.VisibleInventoryItems)
         cell.Element.Position + cell.Element.Size, 0xFFFFFFFF);
 ```
 
-> **Controller mode:** Side panels, visible stash cells, and the world-travel map are not resolved yet.
+> **Controller mode:** The host resolves the shared UI objects — side panels (`LeftPanel`/`RightPanel`),
+> visible stash/inventory cells, the atlas map, skill trees, and area maps — transparently in gamepad mode
+> too (panel resolution is gated behind the user's *Controller support* toggle). Plugins consume the same
+> `RemoteObjects` regardless of input mode, so most need no controller-specific code. To branch explicitly,
+> read the read-only `Core.IsControllerMode` (reflects the user's controller-mode setting, not a live input
+> state). `IsAnyLargePanelOpen` already accounts for gamepad menus, so overlay-hiding works in both modes.
 
 ---
 
