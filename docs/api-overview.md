@@ -606,6 +606,36 @@ if (entity.TryGetComponent<Render>(out var render))
 
 ---
 
+### `Pathfinding`
+
+Live navigation state — where an entity is moving and the path it is following. Present on entities that
+navigate the area (monsters, minions, the player).
+
+| Member | Type | Description |
+|---|---|---|
+| `IsMoving` | `bool` | `true` while the entity is actively following a path. |
+| `PathWorldPositions` | `Vector2[]` | The computed path as world-space X/Y points, **destination-first**: index `0` is the destination it is heading toward, higher indices trace back toward where it came from (the entity sits near index `1`). Empty when idle. Pass each point to `WorldToScreen` (using the entity's world Z as the height) to draw the route. |
+| `MoveDirection` | `StdTuple2D<float>` | Normalized 2-D heading (unit vector) the entity is moving toward. Zero-length when idle. |
+| `CurrentNodeIndex` | `int` | Current waypoint node index, or `-1` when idle. |
+| `TargetNodeIndex` | `int` | Target waypoint node index, or `-1` when idle. |
+
+```csharp
+if (entity.TryGetComponent<Pathfinding>(out var pf) && pf.IsMoving &&
+    pf.PathWorldPositions.Length > 0 &&
+    entity.TryGetComponent<Render>(out var render))
+{
+    var height = render.WorldPosition.Z;
+    var from = world.WorldToScreen(render.WorldPosition, height);
+    var destination = world.WorldToScreen(pf.PathWorldPositions[0], height); // [0] = destination
+    ImGui.GetBackgroundDrawList().AddLine(from, destination, 0xFF00FFFF, 2f);
+}
+```
+
+The waypoint node indices point into an area-wide navigation graph the SDK does not expose — use
+`PathWorldPositions` (already converted to world space) to draw the route, not the raw indices.
+
+---
+
 ### `Positioned`
 
 Faction and alignment.
@@ -902,6 +932,35 @@ if (item.TryGetComponent<RenderItem>(out var render))
 
 ---
 
+### `Sockets`
+
+Present on items with gem / jewel / soul-core sockets. Exposes each socket's type, the address of the item socketed into it, and that item's metadata path. All three arrays are index-aligned (one entry per socket, in slot order).
+
+| Member | Type | Description |
+|---|---|---|
+| `SocketTypes` | `SocketType[]` | Type of each socket: `None`, `Gem`, `Jewel`, `SoulCore`, `Delve` (`OriathHub.RemoteEnums.SocketType`). |
+| `SocketedItemAddresses` | `IntPtr[]` | Entity address of the item socketed into each slot; `IntPtr.Zero` when empty. Socketed items are **not** valid world entities, so they cannot be wrapped as an `Entity` — read further data via `Core.Process` using this address. |
+| `SocketedItemPaths` | `string[]` | Metadata path of the socketed item, e.g. `Metadata/Items/SoulCores/TalismanSpecial7`; empty string when the socket is empty. |
+
+```csharp
+using OriathHub.RemoteEnums; // SocketType
+
+if (item.TryGetComponent<Sockets>(out var sockets))
+{
+    for (var i = 0; i < sockets.SocketTypes.Length; i++)
+    {
+        var path = sockets.SocketedItemPaths[i];
+        var occupant = string.IsNullOrEmpty(path) ? "(empty)" : path;
+        Log.Info($"Socket {i}: {sockets.SocketTypes[i]} -> {occupant}", Name);
+
+        // Need the socketed item's own components (e.g. its Quality)? Use the address:
+        // Core.Process.ReadMemory<...>(sockets.SocketedItemAddresses[i], out var raw);
+    }
+}
+```
+
+---
+
 ### `Animated`
 
 Animated entity (projectile, summoned object). Only updated when the address first changes.
@@ -974,6 +1033,7 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `IsPassiveSkillTreeOpen` | `bool` | `true` if the passive skill tree is visible. |
 | `IsAtlasSkillTreeOpen` | `bool` | `true` if the atlas skill tree is visible. |
 | `IsAtlasMapOpen` | `bool` | `true` if the endgame atlas map screen is visible. |
+| `AtlasPanel` | `UiElementBase` | The endgame atlas map panel. Visible only while open; equivalent to `IsAtlasMapOpen` plus the panel's address. Resolved in both KB/M and controller mode. |
 | `LeftPanel` | `UiElementBase` | The currently open left panel. Visible only while open. |
 | `RightPanel` | `UiElementBase` | The currently open right panel. Visible only while open. |
 | `WorldMapPanel` | `UiElementBase` | The world-travel map screen. Visible only while open. |

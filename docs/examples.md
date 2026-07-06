@@ -168,6 +168,62 @@ public override void DrawUI()
 }
 ```
 
+## Draw monster movement paths
+
+Use `Pathfinding` to draw a line from each moving monster to where it is heading. `PathWorldPositions` is
+stored destination-first (index `0` is the destination), already converted to world space, so each point
+projects straight through `WorldToScreen`. Use the monster's world Z as the projection height for every
+point (the path is 2-D).
+
+```csharp
+public override void DrawUI()
+{
+    if (Core.States.GameCurrentState != GameStateTypes.InGameState)
+    {
+        return;
+    }
+
+    var inGame = Core.States.InGameStateObject;
+    if (inGame.GameUi.IsAnyLargePanelOpen)
+    {
+        return;
+    }
+
+    var world = inGame.CurrentWorldInstance;
+    var draw = ImGui.GetBackgroundDrawList();
+
+    foreach (var entity in inGame.CurrentAreaInstance.AwakeEntities.Values)
+    {
+        if (!entity.IsValid || entity.EntityType != EntityTypes.Monster)
+        {
+            continue;
+        }
+
+        // Only entities actively following a path expose a route.
+        if (!entity.TryGetComponent<Pathfinding>(out var pf) || !pf.IsMoving)
+        {
+            continue;
+        }
+
+        var path = pf.PathWorldPositions;
+        if (path.Length == 0 || !entity.TryGetComponent<Render>(out var render))
+        {
+            continue;
+        }
+
+        var height = render.WorldPosition.Z;
+        var from = world.WorldToScreen(render.WorldPosition, height);
+        var destination = world.WorldToScreen(path[0], height); // index 0 = destination
+
+        draw.AddLine(from, destination, ImGuiHelper.Color(255, 60, 40, 230), 2f);
+        draw.AddCircleFilled(destination, 5f, ImGuiHelper.Color(255, 60, 40, 230));
+
+        // Optional: the entity's instantaneous heading, independent of the path.
+        var dir = pf.MoveDirection; // unit vector, (0,0) when idle
+    }
+}
+```
+
 ## Keep visual overlays visible while settings are focused
 
 Use `FocusHelper.IsGameOrOverlayForeground()` for visual overlays that users may tune live from OriathHub settings. This keeps the overlay visible when the game is behind the settings window. Use `FocusHelper.IsGameForeground()` or `Core.Process.Foreground` instead for hotkeys, automation logic, and true "hide when game is in the background" settings.
