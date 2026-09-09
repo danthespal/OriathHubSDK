@@ -332,6 +332,10 @@ if (Core.Prices.TryGetPrice(in query, Core.Prices.League, out var quote))
 `TryGetPrice(Item, …)` is just a convenience wrapper that builds a `PriceQuery` from the item's
 components.
 
+For a "custom window" — one the host has no `ImportantUiElements` accessor for — see **Resolving a window
+found via Game UiExplorer** under [UI panels](#ui-panels) for how to relocate it, then price each slot with
+either of the two approaches above depending on whether you can resolve a live `Item`.
+
 ### Pricing a different league (advanced)
 
 To price against a league other than the global one, acquire a lease for it (so its catalogue loads and
@@ -1028,7 +1032,7 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 
 | Member | Type | Description |
 |---|---|---|
-| `IsAnyLargePanelOpen` | `bool` | `true` if any blocking panel is open: left/right side panel, skill tree, or world-travel map. Use this to hide world-space overlays while the player is in a menu. |
+| `IsAnyLargePanelOpen` | `bool` | `true` if any blocking panel is open: left/right side panel, skill tree, or checkpoint-travel panel. Use this to hide world-space overlays while the player is in a menu. |
 | `IsSkillTreeOpen` | `bool` | `true` if a passive or atlas skill-tree graph view is visible. |
 | `IsPassiveSkillTreeOpen` | `bool` | `true` if the passive skill tree is visible. |
 | `IsAtlasSkillTreeOpen` | `bool` | `true` if the atlas skill tree is visible. |
@@ -1036,7 +1040,8 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `AtlasPanel` | `UiElementBase` | The endgame atlas map panel. Visible only while open; equivalent to `IsAtlasMapOpen` plus the panel's address. Resolved in both KB/M and controller mode. |
 | `LeftPanel` | `UiElementBase` | The currently open left panel. Visible only while open. |
 | `RightPanel` | `UiElementBase` | The currently open right panel. Visible only while open. |
-| `WorldMapPanel` | `UiElementBase` | The world-travel map screen. Visible only while open. |
+| `CheckpointTravelPanel` | `UiElementBase` | The checkpoint-travel screen. Visible only while open. |
+| `WorldMapPanel` | `UiElementBase` | Deprecated compatibility alias for `CheckpointTravelPanel`. Existing plugins continue to work; use `CheckpointTravelPanel` in new code. |
 | `LargeMap` | `LargeMapUiElement` | The in-area large map. |
 | `MiniMap` | `MapUiElement` | The minimap. |
 | `ChatParent` | `ChatParentUiElement` | The chat UI element. |
@@ -1053,6 +1058,8 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `Size` | `Vector2` | Element size in pixels. |
 | `Scale` | `float` | Cached UI scale-like value exposed for compatibility. Position/size calculations use `Position` and `Size`. |
 | `Flags` | `uint` | Raw UI element flags read from the game. Useful for traversal predicates and diagnostics. |
+| `StringId` | `string` | The element's game-assigned name (e.g. `"ritual_reward"`), when it has one. Empty for plain layout/container elements. Stable across sessions, unlike the address. Computed lazily — the first read after an update does a cross-process memory read, cached until the element's next `UpdateData`. Cheap to read once per element per frame; avoid re-reading it many times per frame for the same element. |
+| `VtableRva` | `long` | The element's vtable address, expressed as an offset from the game module's base (mod+0xRVA). Every element sharing a C++ class shares this value, so it identifies the element's *type* rather than its position in the tree — it survives a relayout that reorders, adds, or removes siblings, unlike a hardcoded child-index path. Not unique by itself (every element of that type has it); pair it with `StringId` and/or a tightly-scoped search anchor. 0 when the vtable isn't inside the game module. Computed lazily, same caching as `StringId` (cheaper — no memory read, just a comparison). See **Resolving a window found via Game UiExplorer** below for the recommended way to use it. |
 | `TotalChildrens` | `int` | Number of child UI elements. The spelling matches the public API. |
 | `TryGetParent(out parent)` | `bool` | Returns the cached parent element if one is available. During transitions this can return `false`. |
 | `this[index]` | `UiElementBase?` | Lazily materializes and caches a child element by index, or returns `null` when the index is out of range or when a previously-cached child has `IsValidElement == false`. Always returns the base type. |
@@ -1204,6 +1211,109 @@ if (panel.IsVisible)
         ImGui.Text($"child count: {parent.TotalChildrens}");
 }
 ```
+
+**Resolving a window found via Game UiExplorer:**
+
+When the host doesn't already expose a window you need (no `ImportantUiElements` lease covers it — e.g. a
+one-off reward/mechanic screen), find it once with Game UiExplorer: `Explore` some element you can reach
+in code, use "Go to child" to drill down to the window, then grab one of its two "copy" buttons. They
+trade off differently, so prefer identity and fall back to path:
+
+- **"copy identity"** — the element's `VtableRva` (+ `StringId` when it has one). This identifies the
+  element's *type*, not its position, so it keeps working across a relayout that reorders, adds, or
+  removes siblings. **Prefer this.**
+- **"copy path"** — the child-index chain from the explored root (`root[i0][i1]...`). Exact, but breaks
+  the moment the game changes how many children something has upstream of your target.
+
+*Identity (preferred):* "copy identity" always gives you the element's `VtableRva`, and appends its
+`StringId` too when it has one (most plain layout/list/container elements don't — that's normal, not a
+sign anything's wrong). Two shapes you'll see:
+
+```
+mod+0xRVA  (type-identity: UiElementTraversal.FindFirst(anchor, e => e.VtableRva == 0xRVA) — pick 'anchor' as close to this element as you can reliably re-obtain.)
+
+mod+0xRVA  StringId 'some_id'  (type-identity: UiElementTraversal.FindFirst(anchor, e => e.VtableRva == 0xRVA && e.StringId == "some_id") — pick 'anchor' as close to this element as you can reliably re-obtain.)
+```
+
+Prefer the second shape when it's available — the `StringId` clause makes the search strictly more
+selective. Either way, `VtableRva` by itself only says "an element built from this C++ class" — every
+element sharing that class (every row in a generic list, say) shares the same value — so **verify it's
+actually unique under the anchor you intend to use** before hardcoding it, rather than assuming:
+
+```csharp
+// Temporary — run once, check the count, then delete. Anchor as tight as you can re-obtain reliably —
+// e.g. the target's immediate parent, found via Game UiExplorer's ancestry chips.
+var anchor = ...;
+var matches = UiElementTraversal.FindAll(anchor, e => e.VtableRva == 0xRVA).Count();
+Log.Info($"matches under anchor: {matches}", Name); // 1 == safe to hardcode; >1 == tighten anchor or add StringId
+```
+
+The check is only as good as the anchor scope you run it at: under a tight anchor (the target's immediate
+parent) it will usually come back `1`; under something broad like the HUD root, the same generic widget
+class can easily appear more than once elsewhere in the tree. Always verify under the same anchor your
+real code will use.
+
+Once verified, drop the check and keep the `FindFirst` call:
+
+```csharp
+// From Game UiExplorer's "copy identity" — verified unique under its immediate parent, see above.
+private const long MyWindowVtableRva = 0xRVA;
+
+public override void DrawUI()
+{
+    var anchor = ...; // the same tight anchor the uniqueness check above was run against
+    if (!anchor.IsVisible)
+        return;
+
+    var target = UiElementTraversal.FindFirst(anchor, e => e.VtableRva == MyWindowVtableRva);
+    if (target == null)
+        return; // not found this frame — window closed, or the identity changed after a patch
+
+    for (var i = 0; i < target.TotalChildrens; i++)
+    {
+        var slot = target[i];
+        if (slot == null || !slot.IsVisible)
+            continue;
+
+        // slot is the child UiElement itself — resolving its underlying Item entity (or the base
+        // Path/Rarity/ArtPath to build a PriceQuery from) is specific to this window and still needs
+        // its own RE, the same as any other item-bearing UI. Once you have either, price it the usual
+        // way: Core.Prices.TryGetPrice(item, Core.Prices.League, out var quote), or build a PriceQuery
+        // (see "Pricing without an Item" above) when you only have the item's data, not a live entity.
+    }
+}
+```
+
+*Path (fallback, when identity search can't be scoped tightly enough):* "copy path" instead produces
+something like:
+
+```
+0xROOT_ADDR[3][12] -> 0xTARGET_ADDR  (walk from the root via the UiElementBase indexer: root[i0][i1]...)
+```
+
+The leading address is only valid for the session it was captured in — addresses change every run. What
+you actually hardcode is the **index chain**, `[3, 12]`, replayed against a root you can reliably
+re-obtain the same way as the anchor above:
+
+```csharp
+// From Game UiExplorer's "copy path": "0xROOT_ADDR[3][12] -> 0xTARGET_ADDR"
+private static readonly int[] MyWindowPath = { 3, 12 };
+
+private static UiElementBase? Walk(UiElementBase root, IReadOnlyList<int> path)
+{
+    var current = root;
+    foreach (var index in path)
+    {
+        current = current?[index];
+        if (current == null)
+            return null; // path didn't resolve — the panel likely relayouted; re-copy the path
+    }
+
+    return current;
+}
+```
+
+`Walk` drops straight into the `DrawUI` loop above in place of `UiElementTraversal.FindFirst(...)`.
 
 **Map UI elements:**
 
