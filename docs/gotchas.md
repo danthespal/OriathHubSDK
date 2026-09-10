@@ -148,6 +148,12 @@ Log.Error($"failed to load texture: {ex}", Name);
 - Use `FocusHelper.IsGameForeground()` or `Core.Process.Foreground` instead for foreground-only hotkeys, automation gates, and true "hide when game is in the background" settings.
 - Return early when `GameUi.IsAnyLargePanelOpen` if your world overlay would cover menus.
 - Cache expensive work outside `DrawUI` and update caches on events such as `RemoteEvents.AreaChanged`.
+- If you search the UI tree for a panel with `UiElementTraversal.FindFirst`/`FindAll` (e.g. "is my
+  window open"), don't call it unconditionally every frame — that search is most expensive exactly
+  when it keeps failing, which is the common case while the panel stays closed. Gate it behind
+  `ChangeGate<T>` (see [api-overview.md](api-overview.md#ui-panels)) so the tree walk only runs
+  when a cheap signal (a raw pointer, a visibility flag) actually changes. A real plugin lost ~50ms/frame
+  this way — an unconditional `FindFirst` scan on every `DrawUI` call while its target window was closed.
 
 ## Releasing resources on disable and reload
 

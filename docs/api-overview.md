@@ -1106,6 +1106,51 @@ if (!element.IsValidElement)
 The `this[index]` indexer automatically returns `null` for any cached child whose `IsValidElement` is
 `false`, so `UiElementTraversal.BreadthFirst` / `FindFirst` / `FindAll` are safe without an extra check.
 
+**Don't call `FindFirst`/`FindAll` unconditionally from `DrawUI`.** A tree search is cheap when it
+succeeds quickly, but it's most expensive exactly when it keeps failing — and "the panel I'm looking
+for is closed" is the *common* case for most in-game windows, not the exception. A plugin that
+re-searches from a broad root (e.g. `GameUi`) every single frame while its target panel stays closed
+pays the full cost of that search 60-140+ times a second for nothing. Gate the search behind
+`ChangeGate<T>` so it only runs when something cheap-to-check has actually changed:
+
+```csharp
+private readonly ChangeGate<(IntPtr Ptr, bool Visible)> rewardWindowGate = new();
+private IntPtr cachedRewardWindow = IntPtr.Zero;
+
+public override void DrawUI()
+{
+    // Cheap every frame: one pointer read, one flag read — no tree walk.
+    var raw = Core.Process.ReadMemory<IntPtr>(gameUiAddress + RewardWindowOffset, out var ptr) ? ptr : IntPtr.Zero;
+    var visible = raw != IntPtr.Zero && IsVisibleFlag(raw);
+
+    if (rewardWindowGate.HasChanged((raw, visible)))
+    {
+        // Expensive: only runs on the frame something actually changed (window opened,
+        // closed, or was replaced) — not every frame while it stays closed.
+        cachedRewardWindow = visible
+            ? UiElementTraversal.FindFirst(gameUiElement, e => e.VtableRva == RewardWindowVtableRva)?.Address ?? IntPtr.Zero
+            : IntPtr.Zero;
+    }
+
+    if (cachedRewardWindow == IntPtr.Zero)
+        return;
+
+    // ... draw using cachedRewardWindow
+}
+```
+
+`ChangeGate<T>.HasChanged` returns `true` on the first call and whenever the value you pass differs
+from the one passed last time; otherwise `false`. It has no idea what `T` means — it just remembers
+the last value and compares — so it works for any cheap signal: a single `IntPtr`, a `bool`, or a
+value tuple of several signals that must *all* match to skip work, as above. Call `.Reset()` on area
+change (or similar) if a stale "nothing changed" verdict from before the transition would otherwise
+suppress a check that should now run fresh.
+
+This is the same discipline the host itself uses everywhere on the per-frame path — `UiElementBase`
+skips re-reading its children when the underlying vector's bounds haven't moved, `ImportantUiElements`
+only re-resolves a panel when its cached address changes — `ChangeGate<T>` just factors that pattern
+out so you don't have to hand-roll the caching fields and comparison logic yourself.
+
 When you need child elements as your own derived type, use `GetChildAddress` instead of `this[index]`:
 
 ```csharp
