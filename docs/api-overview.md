@@ -87,7 +87,27 @@ string areaName = Core.States.AreaLoading.CurrentAreaName;
 | `GridHeightData` | `float[][]` | Per-grid-cell terrain height, indexed `[y][x]`. |
 | `GridWalkableData` | `byte[]` | Raw walkability bitfield for the current area. |
 | `TgtTilesLocations` | `Dictionary<string, List<Vector2>>` | Grid positions of named map tiles (useful for detecting league-mechanic spawn tiles). |
+| `Rooms` | `List<AreaRoom>` | The rooms the area was generated from, read from its terrain graph. Each has the room asset `Name` (e.g. `Metadata/Terrain/Gallows/Act1/1_2/Rooms/Unique/campsite_02.arm`), its tile-space `MinTile`/`MaxTile` bounds, the same bounds in grid space as `MinGrid`/`MaxGrid`, and `ContainsGridPosition(Vector2)`. Use it to scope a position to a named room. Empty when the area exposes no graph. |
 | `WorldToGridConvertor` | `float` | Divide a world-space coordinate by this to obtain a grid coordinate. |
+
+```csharp
+// Find the grid positions of a named tile that sit inside a particular room,
+// e.g. only the chests that are actually in the campsite.
+var campsites = area.Rooms
+    .Where(room => room.Name.Contains("campsite", StringComparison.OrdinalIgnoreCase))
+    .ToList();
+
+foreach (var (tileName, positions) in area.TgtTilesLocations)
+{
+    foreach (var position in positions)
+    {
+        if (campsites.Any(room => room.ContainsGridPosition(position)))
+        {
+            Log.Information($"{tileName} at {position} is inside the campsite");
+        }
+    }
+}
+```
 
 ```csharp
 // Iterate every awake entity
