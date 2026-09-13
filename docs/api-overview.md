@@ -264,6 +264,7 @@ if (entity.HasComponent("Life")) { /* present, whether or not it has been materi
 | `FlaskInventory` | `Inventory` | Inventory wrapper for the flask slots (`InventoryName.Flask1`). |
 | `AvailableInventories` | `IReadOnlyCollection<InventoryName>` | Inventory names currently present on the player's server data. Stash tabs carry dynamic ids beyond the named `InventoryName` values and appear here as unnamed `InventoryName` casts. |
 | `GetInventory(name)` | `Inventory` | Returns a cached, self-updating wrapper for the given inventory. Safe to call every frame — the host keeps its address and items current (~5×/sec). When the inventory is not present the wrapper has a zero address and empty `Items`, filling in automatically once it appears. Pass any value from `AvailableInventories` (including stash-tab casts). |
+| `SanctumState` | `SanctumState` | The player's Sanctum resources (Sacred Water, honour lost, keys). Only populated while a lease from `ImportantUiElements.RequestSanctumData()` is held; refreshed ~5×/sec. See [Sanctum floor map](#sanctum-floor-map). |
 
 ```csharp
 // Price/inspect every loaded inventory, including open stash tabs.
@@ -1067,6 +1068,11 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `ChatParent` | `ChatParentUiElement` | The chat UI element. |
 | `AtlasMapsNodesUiElements` | `List<AtlasMapsNodeUiElement>` | Atlas map node controls currently present on the endgame atlas map screen. **Only populated while a lease from `ImportantUiElements.RequestAtlasMapNodes()` is held** — see below. Each node exposes UI-element basics plus map name/id, description, biome id, raw status flags, derived status state, completion, and current runnable state. |
 | `AtlasMapConnections` | `IReadOnlyList<AtlasMapNodeConnection>` | Connections (edges) between revealed atlas map nodes on the endgame atlas map. Each entry exposes `From` and `To` (`AtlasMapsNodeUiElement`); draw a routing line between `From.Position` and `To.Position`. Edges are deduplicated (one per undirected pair) and only include endpoints that have an on-screen control — connections involving fogged/unrevealed nodes are omitted. **Only populated while a lease from `ImportantUiElements.RequestAtlasMapNodes()` is held.** Enumerate during `DrawUI`, do not mutate or cache across frames. |
+| `SanctumFloorWindow` | `UiElementBase` | The Sanctum floor map window. Visible only while open. Keyboard/mouse mode only (zero address in controller mode). |
+| `IsSanctumFloorWindowOpen` | `bool` | `true` while the Sanctum floor map is open. |
+| `SanctumRoomsByLayer` | `IReadOnlyList<IReadOnlyList<SanctumRoomUiElement>>` | Sanctum rooms grouped by layer, indexed `[layer][room]` (matches each room's `Layer`/`RoomIndex`). **Only populated while the floor map is open and a lease from `ImportantUiElements.RequestSanctumData()` is held** — see [Sanctum floor map](#sanctum-floor-map). |
+| `SanctumRoomConnections` | `IReadOnlyList<SanctumRoomConnection>` | Connections between Sanctum rooms, each with `From`, `To` (next layer) and `State`. Same availability as `SanctumRoomsByLayer`. |
+| `SanctumCurrentRoom` | `SanctumRoomUiElement` | The player's current Sanctum room (deepest room on the taken path), or `null` when unknown. Same availability as `SanctumRoomsByLayer`. |
 
 **`UiElementBase` common members:**
 
@@ -1245,6 +1251,86 @@ public override void OnDisable()
 {
     this.atlasLease?.Dispose();
     this.atlasLease = null;
+}
+```
+
+### Sanctum floor map
+
+Sanctum data is **opt-in** like atlas nodes: hold a lease from `ImportantUiElements.RequestSanctumData()` while
+the plugin is enabled. The lease enables `SanctumRoomsByLayer`, `SanctumRoomConnections`, `SanctumCurrentRoom`
+(while the floor map is open, updated every frame) and `ServerData.SanctumState` (any time in the Sanctum,
+refreshed about 5 times a second). The floor map is resolved in keyboard/mouse mode only.
+
+The game re-creates room elements whenever the floor state changes (for example after entering a room), so
+read the lists fresh each frame and do not keep room references.
+
+**`SanctumRoomUiElement` members** (derives from `UiElementBase`, so `Position`/`Size` are the on-screen rect):
+
+| Member | Type | Description |
+|---|---|---|
+| `Layer` | `int` | Layer (column) index: 0 is the start room, the last layer is the boss. |
+| `RoomIndex` | `int` | Room index within the layer. |
+| `FightRoomId` | `string` | `SanctumRooms.dat` Id of the fight room, e.g. `Caverns_Ritual_06`. Empty while unrevealed. |
+| `RewardRoomId` | `string` | `SanctumRooms.dat` Id of the reward room, e.g. `Caverns_TreasureWaterMinor`. Empty when unrevealed or rewardless. |
+| `AfflictionId` | `string` | `SanctumPersistentEffects.dat` Id, e.g. `AfflictionTrapSpeed`. Empty when none. |
+| `AfflictionName` | `string` | Affliction display name, e.g. `Rapid Quicksand`. Empty when none. |
+| `IsOnTakenPath` | `bool` | Room is on the path already walked. |
+| `IsNextChoice` | `bool` | Room can be chosen next. |
+| `IsReachable` | `bool` | Room can still be reached later. |
+| `IsBoss` | `bool` | Boss room. |
+| `IsAnchor` | `bool` | Fixed start or boss room. |
+| `IsRevealed` | `bool` | Room is shown on the map; cleared on rooms cut off by the chosen path. |
+
+**`SanctumRoomConnection` members:** `From` (`SanctumRoomUiElement`), `To` (`SanctumRoomUiElement`, always in
+the next layer) and `State` (`SanctumConnectionState`):
+
+| `SanctumConnectionState` | Meaning |
+|---|---|
+| `NotReachable` | The connection can no longer be walked. |
+| `FromCurrentRoom` | Leaves the player's current room — a choice available now. |
+| `Ahead` | Reachable further ahead. |
+| `Taken` | Already walked. |
+
+**`SanctumState` members** (`area.ServerDataObject.SanctumState`):
+
+| Member | Type | Description |
+|---|---|---|
+| `IsAvailable` | `bool` | `true` while Sanctum state is readable (lease held and state present). |
+| `SacredWater` | `int` | Sacred Water total. |
+| `SacredWaterGained` | `int` | Sacred Water gained, shown as `+N` next to the total. |
+| `HonourLost` | `int` | Honour lost. Current honour = player stat `GameStats.total_sanctum_honour` − `HonourLost`. |
+| `BronzeKeys` / `SilverKeys` / `GoldKeys` | `int` | Key counts. |
+
+```csharp
+private IDisposable? sanctumLease;
+
+public override void OnEnable(bool isGameOpened) => this.sanctumLease = ImportantUiElements.RequestSanctumData();
+
+public override void OnDisable()
+{
+    this.sanctumLease?.Dispose();
+    this.sanctumLease = null;
+}
+
+public override void DrawUI()
+{
+    var inGame = Core.States.InGameStateObject;
+    if (Core.States.GameCurrentState != GameStateTypes.InGameState || !inGame.GameUi.IsSanctumFloorWindowOpen)
+        return;
+
+    var drawList = ImGui.GetBackgroundDrawList();
+    foreach (var layer in inGame.GameUi.SanctumRoomsByLayer)
+    {
+        foreach (var room in layer)
+        {
+            if (room.IsNextChoice)
+                drawList.AddRect(room.Position, room.Position + room.Size, 0xFF00FFFF, 0f, ImDrawFlags.None, 3f);
+        }
+    }
+
+    var state = inGame.CurrentAreaInstance.ServerDataObject.SanctumState;
+    if (state.IsAvailable)
+        ImGui.Text($"Sacred Water: {state.SacredWater}, keys {state.BronzeKeys}/{state.SilverKeys}/{state.GoldKeys}");
 }
 ```
 
