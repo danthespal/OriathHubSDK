@@ -524,16 +524,13 @@ Animation state and active skill data for monsters and players.
 
 | Member | Type | Description |
 |---|---|---|
-| `UseStage` | `int` | Current use/cast stage reported by the skill data. |
-| `CastType` | `int` | Raw cast-type value. |
 | `ActiveSkillsDatId` | `uint` | Row ID in ActiveSkills.dat. |
 | `TotalCooldownTimeInMs` | `int` | Cooldown duration in milliseconds. |
 | `TotalUses` | `int` | Total number of times the skill has been used this session. |
 | `UnknownIdAndEquipmentInfo` | `uint` | Packed gem socket / equipment info. Use as the key into `Actor.ActiveSkillCooldowns`. |
-| `GrantedEffectsDatRow` | `IntPtr` | Pointer to the GrantedEffects.dat row. |
+| `ActionTypesDatRow` | `IntPtr` | Pointer to the ActionTypes.dat row; its first field is the skill Id string. |
 | `GrantedEffectsPerLevelDatRow` | `IntPtr` | Pointer to the GrantedEffectsPerLevel.dat row. |
-| `ActiveSkillsDatPtr` | `IntPtr` | Pointer to the ActiveSkills.dat row/data block. |
-| `GrantedEffectStatSetsPerLevelDatRow` | `IntPtr` | Pointer to the granted-effect stat set row. |
+| `GrantedEffectStatSetsPerLevelDatRow` | `IntPtr` | Pointer to the GrantedEffectStatSetsPerLevel.dat row. |
 
 **`ActiveSkillCooldownInfo` properties:**
 
@@ -588,7 +585,6 @@ Active buffs and debuffs on an entity.
 | `SourceEntityId` | `uint` | ID of the entity that applied the effect. |
 | `FlaskSlot` | `short` | Source flask slot (0–4); -1 if not from a flask. |
 | `Effectiveness` | `short` | Raw effectiveness modifier (display value = 100 + this). |
-| `UnknownIdAndEquipmentInfo` | `uint` | Packed source/equipment information when present. |
 
 ```csharp
 if (entity.TryGetComponent<Buffs>(out var buffs))
@@ -1082,7 +1078,7 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `IsValidElement` | `bool` | `false` after a `Refresh` (or address change) where the self-pointer sanity check failed — meaning the address no longer points to a UiElement (e.g. a vendor inventory panel sharing address space with the stash tree, or a torn-frame transient). Check this after calling `Refresh` if you intend to iterate children or read the element's data. The child indexer already returns `null` for cached elements where this is `false`, so most traversal code is naturally protected without an explicit check. |
 | `Position` | `Vector2` | Screen position (top-left corner). |
 | `Size` | `Vector2` | Element size in pixels. |
-| `Scale` | `float` | Cached UI scale-like value exposed for compatibility. Position/size calculations use `Position` and `Size`. |
+| `Scale` | `float` | Effective UI scale for this element: its window scale (width-based for scale index 1, height-based otherwise) multiplied by its local scale multiplier. |
 | `Flags` | `uint` | Raw UI element flags read from the game. Useful for traversal predicates and diagnostics. |
 | `StringId` | `string` | The element's game-assigned name (e.g. `"ritual_reward"`), when it has one. Empty for plain layout/container elements. Stable across sessions, unlike the address. Computed lazily — the first read after an update does a cross-process memory read, cached until the element's next `UpdateData`. Cheap to read once per element per frame; avoid re-reading it many times per frame for the same element. |
 | `VtableRva` | `long` | The element's vtable address, expressed as an offset from the game module's base (mod+0xRVA). Every element sharing a C++ class shares this value, so it identifies the element's *type* rather than its position in the tree — it survives a relayout that reorders, adds, or removes siblings, unlike a hardcoded child-index path. Not unique by itself (every element of that type has it); pair it with `StringId` and/or a tightly-scoped search anchor. 0 when the vtable isn't inside the game module. Computed lazily, same caching as `StringId` (cheaper — no memory read, just a comparison). See **Resolving a window found via Game UiExplorer** below for the recommended way to use it. |
