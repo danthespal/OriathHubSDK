@@ -11,10 +11,10 @@ Everything a plugin reads hangs off the static `OriathHub.Core` object. The host
 | `Core.Process` | `GameProcess` | Process/window state and the raw memory-read facade. |
 | `Core.States` | `GameStates` | The state machine — `GameCurrentState`, `InGameStateObject`, `AreaLoading`. |
 | `Core.Overlay` | `OriathOverlay` | The ImGui overlay — texture loading and window area. |
-| `Core.OHSettings` | `State` | The host's own settings (treat as read-only from a plugin). |
+| `Core.OHSettings` | `State` | The host's own settings, shared with the host settings window. Treat as read-only: its members are public fields, so a write changes live host behaviour for every plugin and is saved to the user's config. |
 | `Core.CurrentAreaLoadedFiles` | `LoadedFiles` | All game files preloaded for the current area. |
 | `Core.Prices` | `PriceService` | Shared, cache-backed item prices. Price against the global `Core.Prices.League`. |
-| `Core.CoroutinesRegistrar` | `List<ActiveCoroutine>` | Host-owned diagnostics list for long-lived coroutines. Plugins may add coroutines here when they should appear in host coroutine diagnostics, but they must still keep their own handle and cancel it in `OnDisable`. |
+| `Core.CoroutinesRegistrar` | `List<ActiveCoroutine>` | Host-owned diagnostics list for long-lived coroutines. **Not thread-safe — touch it only from the render thread** (`DrawUI`, coroutines). Prefer `StartCoroutine(...)` on `PluginBase`, which cancels your coroutine automatically on disable/reload/unload. Adding a coroutine here only makes it visible in host diagnostics; you must still keep its handle and cancel it in `OnDisable`. |
 | `Core.GetVersion()` | `string` | OriathHub version string. |
 
 ---
@@ -54,6 +54,22 @@ The current area name is always available, even on the loading screen:
 ```csharp
 string areaName = Core.States.AreaLoading.CurrentAreaName;
 ```
+
+**`AreaLoadingState` members:**
+
+| Member | Type | Description |
+|---|---|---|
+| `CurrentAreaName` | `string` | Display name of the current area; updated when an area change completes. |
+| `IsLoading` | `bool` | `true` while the area loading screen is shown. Updated every frame; `false` while the game is not attached. |
+| `TotalLoadingScreenTimeMs` | `uint` | The game's cumulative loading-screen time for the session, in milliseconds. Advances only while loading and never resets — subtract two readings to time a load. |
+
+```csharp
+// Skip work (and noisy logs) while the loading screen is up.
+if (Core.States.AreaLoading.IsLoading)
+    return;
+```
+
+To react once per zone change, subscribe to `RemoteEvents.AreaChanged` (raised shortly after loading finishes) instead of polling `IsLoading`.
 
 **`GameStates` members:**
 
@@ -196,6 +212,26 @@ if (entity.TryGetComponent<Render>(out var render))
 | `CanExplodeOrRemovedFromGame` | `bool` | Host cleanup hint: `true` for entities that can disappear from memory while inside the network bubble. |
 | `ConsecutiveInvalidFrames` | `int` | How many frames in a row this entity has been invalid. |
 | `ComponentNames` | `IReadOnlyCollection<string>` | Snapshot of every game component currently present on the entity, including components with no registered wrapper. |
+
+### Wrapping an entity or item address
+
+`Entity` and `Item` have public constructors that take a raw address, for entities the host does not hand you directly — e.g. an item pointer read from a plugin-specific UI element, or `Sockets.SocketedItemAddresses`. No offsets needed: the host resolves the path and component map.
+
+| Constructor | Use for |
+|---|---|
+| `new Item(address)` | Inventory, stash, socketed, and reward items (anything that is not a world entity). Reports `IsValid = true`, `EntityType = Item`, `EntitySubtype = InventoryItem`, and exposes `Path` and `TryGetComponent<T>`. |
+| `new Entity(address)` | World entities (monsters, chests, players, …). Runs the host's classification; `IsValid` is `false` when the address is not a live world entity. |
+
+```csharp
+using OriathHub.RemoteObjects.Components;               // Stack
+using OriathHub.RemoteObjects.States.InGameStateObjects; // Item
+
+var item = new Item(itemAddress);
+var count = item.TryGetComponent<Stack>(out var stack) ? stack.Count : 1;
+Log.Info($"{item.Path} x{count}", Name);
+```
+
+Construction reads the component map immediately, so avoid constructing many instances per frame when you can keep one. Reassigning the same address re-reads already-loaded components but does not rebuild the component map — construct a new instance when the address may now hold a different item. For world entities the host already tracks, use the instances from `AreaInstance.AwakeEntities`; a separately constructed `Entity` is not part of the host's entity pipeline.
 
 ### EntityTypes
 
@@ -394,7 +430,7 @@ data-phase pricing, status display, and drawing from visible cell geometry.
 
 ## Components
 
-Retrieve any component with `TryGetComponent<T>`. Components live in `OriathHub.RemoteObjects.Components`. The call is cheap — the entity caches components after the first access.
+Retrieve any component with `TryGetComponent<T>`. Components live in `OriathHub.RemoteObjects.Components`. The call is cheap — the entity caches components after the first access, and a cached component re-reads game memory at most once per frame no matter how many times (or by how many plugins) it is requested. Collections on components (`Actor.ActiveSkills`, `Buffs.StatusEffects`, `Stats.StatsChangedByItems`, …) are replaced with new instances on each update rather than cleared and refilled, so a reference you hold or are enumerating stays a consistent snapshot; request the component again on a later frame to see new data.
 
 ```csharp
 using OriathHub.RemoteObjects.Components;
@@ -579,6 +615,7 @@ Active buffs and debuffs on an entity.
 | Member | Type | Description |
 |---|---|---|
 | `BuffDefinationPtr` | `IntPtr` | Pointer to the buff definition row. The spelling matches the public API. |
+| `BuffType` | `byte` | Raw buff type from the buff definition row; `4` is a flask effect. Cached per definition, so free to read. |
 | `TotalTime` | `float` | Full duration in seconds (`float.MaxValue` for permanent effects). |
 | `TimeLeft` | `float` | Remaining time in seconds. |
 | `Charges` | `short` | Stack count. |
@@ -732,6 +769,8 @@ Numeric stat values, split by source.
 | `IsInShapeshiftedForm` | `bool` | `true` if the entity is currently in a shapeshifted form. |
 | `ShapeshiftFormsDatRow` | `IntPtr` | Pointer to the active `ShapeshiftForms.dat` row, or `IntPtr.Zero` when not shapeshifted. Use this to identify which form is active via a raw read. |
 
+`Stats` members are public fields (kept for compatibility with compiled plugins) — treat them as read-only; writing to them corrupts what the host and other plugins see. The two dictionaries are replaced with new instances on each update.
+
 `GameStats` is a large enum in `OriathHub.RemoteEnums`. Browse it in your IDE for the full list of stat IDs.
 
 ```csharp
@@ -881,9 +920,11 @@ Flask or skill charges.
 |---|---|---|
 | `Current` | `int` | Current number of charges. |
 | `PerUseCharge` | `int` | Charges consumed per use. |
+| `MaxCharges` | `int` | Maximum charges the item can hold. Read once per component address, like `PerUseCharge`. |
 
 ```csharp
-if (entity.TryGetComponent<Charges>(out var charges))
+// PerUseCharge is 0 for items without a per-use cost (and before the component is read), so guard the division.
+if (entity.TryGetComponent<Charges>(out var charges) && charges.PerUseCharge > 0)
 {
     int uses = charges.Current / charges.PerUseCharge;
     ImGui.Text($"uses available: {uses}");
@@ -960,11 +1001,12 @@ Present on items with gem / jewel / soul-core sockets. Exposes each socket's typ
 | Member | Type | Description |
 |---|---|---|
 | `SocketTypes` | `SocketType[]` | Type of each socket: `None`, `Gem`, `Jewel`, `SoulCore`, `Delve` (`OriathHub.RemoteEnums.SocketType`). |
-| `SocketedItemAddresses` | `IntPtr[]` | Entity address of the item socketed into each slot; `IntPtr.Zero` when empty. Socketed items are **not** valid world entities, so they cannot be wrapped as an `Entity` — read further data via `Core.Process` using this address. |
+| `SocketedItemAddresses` | `IntPtr[]` | Entity address of the item socketed into each slot; `IntPtr.Zero` when empty. Socketed items are **not** valid world entities — wrap one with `new Item(address)` (see [Wrapping an entity or item address](#wrapping-an-entity-or-item-address)) to read its components. |
 | `SocketedItemPaths` | `string[]` | Metadata path of the socketed item, e.g. `Metadata/Items/SoulCores/TalismanSpecial7`; empty string when the socket is empty. |
 
 ```csharp
-using OriathHub.RemoteEnums; // SocketType
+using OriathHub.RemoteEnums;                             // SocketType
+using OriathHub.RemoteObjects.States.InGameStateObjects; // Item
 
 if (item.TryGetComponent<Sockets>(out var sockets))
 {
@@ -974,8 +1016,10 @@ if (item.TryGetComponent<Sockets>(out var sockets))
         var occupant = string.IsNullOrEmpty(path) ? "(empty)" : path;
         Log.Info($"Socket {i}: {sockets.SocketTypes[i]} -> {occupant}", Name);
 
-        // Need the socketed item's own components (e.g. its Quality)? Use the address:
-        // Core.Process.ReadMemory<...>(sockets.SocketedItemAddresses[i], out var raw);
+        // Need the socketed item's own components (e.g. its Quality)? Wrap the address:
+        var address = sockets.SocketedItemAddresses[i];
+        if (address != IntPtr.Zero && new Item(address).TryGetComponent<Quality>(out var quality))
+            Log.Info($"  quality {quality.ItemQuality}", Name);
     }
 }
 ```
@@ -1080,6 +1124,8 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `Size` | `Vector2` | Element size in pixels. |
 | `Scale` | `float` | Effective UI scale for this element: its window scale (width-based for scale index 1, height-based otherwise) multiplied by its local scale multiplier. |
 | `Flags` | `uint` | Raw UI element flags read from the game. Useful for traversal predicates and diagnostics. |
+| `BackgroundColor` | `Vector4` | Background color (RGBA, 0..1) as last read. Useful as a state signal, e.g. a panel that fades its background when inactive. No extra read. |
+| `UnscaledSize` | `Vector2` | Size before UI scaling, in the game's base-resolution units; `Size` is this times the element's scale. No extra read. |
 | `StringId` | `string` | The element's game-assigned name (e.g. `"ritual_reward"`), when it has one. Empty for plain layout/container elements. Stable across sessions, unlike the address. Computed lazily — the first read after an update does a cross-process memory read, cached until the element's next `UpdateData`. Cheap to read once per element per frame; avoid re-reading it many times per frame for the same element. |
 | `VtableRva` | `long` | The element's vtable address, expressed as an offset from the game module's base (mod+0xRVA). Every element sharing a C++ class shares this value, so it identifies the element's *type* rather than its position in the tree — it survives a relayout that reorders, adds, or removes siblings, unlike a hardcoded child-index path. Not unique by itself (every element of that type has it); pair it with `StringId` and/or a tightly-scoped search anchor. 0 when the vtable isn't inside the game module. Computed lazily, same caching as `StringId` (cheaper — no memory read, just a comparison). See **Resolving a window found via Game UiExplorer** below for the recommended way to use it. |
 | `TotalChildrens` | `int` | Number of child UI elements. The spelling matches the public API. |
@@ -1088,20 +1134,29 @@ if (entity.TryGetComponent<DiesAfterTime>(out _))
 | `GetChildAddress(index)` | `IntPtr` | Address of the child at `index` without materializing it, or `IntPtr.Zero` if the index is invalid. Uses the already-cached child addresses, so no extra memory read. |
 | `Refresh(reloadChildren = false)` | `void` | Re-reads the element. Pass `true` when a dynamic UI reuses the same child-vector allocation but replaces its pointers in place, such as folder stash subtabs. After a failed Refresh `IsValidElement` will be `false` and `TotalChildrens` will be `0`. |
 
-To wrap a UI element the host does **not** already expose, create a small derived type and pass the raw UI-element address to the protected base constructor:
+To wrap a UI element the host does **not** already expose, construct it directly from its raw address. Derive a type only when you want to add your own fields:
 
 ```csharp
+var panel = new UiElementBase(address);
+if (panel.IsVisible)
+    ImGui.GetForegroundDrawList().AddRect(panel.Position, panel.Position + panel.Size, 0xFF00FF00);
+
 public sealed class CustomPanelElement : UiElementBase
 {
     public CustomPanelElement(IntPtr address) : base(address) { }
 }
-
-var panel = new CustomPanelElement(address);
-if (panel.IsVisible)
-    ImGui.GetForegroundDrawList().AddRect(panel.Position, panel.Position + panel.Size, 0xFF00FF00);
 ```
 
-The protected constructor parses the element immediately and resolves its parent chain via a shared internal cache, so `Position`/`Size` are correct. Reassign `.Address` to refresh it on a later frame.
+The constructor parses the element immediately and resolves its parent chain via a shared internal cache, so `Position`/`Size` are correct. Reassign `.Address` to refresh it on a later frame.
+
+Each construction reads the whole element. When you only need to scan many elements per frame — e.g. matching flag fingerprints across a panel's children — use the static readers, which do not construct wrappers, and construct only the element you keep:
+
+| Member | Description |
+|---|---|
+| `UiElementBase.TryReadFlags(address, out uint flags)` | One small read of the element's raw `Flags`. |
+| `UiElementBase.TryReadChildAddresses(address, out IntPtr[] children, maxChildren = 4096)` | Reads the child addresses (vector header + pointer array). Returns `false` without reading the array when the count exceeds `maxChildren`, which guards against non-UI addresses. |
+
+Neither reader validates that the address is a UI element. Never hardcode UI element layout offsets in your plugin — they move between game patches, and these readers track them for you.
 
 Use `UiElementTraversal` when you need to find descendants by a structural signature rather than fixed child indexes:
 
@@ -1612,7 +1667,7 @@ Subscribe in a coroutine started from `OnEnable`. Start it with `StartCoroutine(
 
 | Event | Class | When it fires |
 |---|---|---|
-| `RemoteEvents.AreaChanged` | `RemoteEvents` | ~50 ms after zone-transition detection. Preloads may not be ready yet. |
+| `RemoteEvents.AreaChanged` | `RemoteEvents` | ~100 ms after zone-transition detection (loading screen finished). Preloads may not be ready yet. |
 | `HybridEvents.PreloadsUpdated` | `HybridEvents` | After `Core.CurrentAreaLoadedFiles` finishes scanning the new area's files. |
 | `OriathEvents.OnMoved` | `OriathEvents` | Game window moved or resized. |
 | `OriathEvents.OnForegroundChanged` | `OriathEvents` | Game window gained or lost foreground. |
@@ -1958,7 +2013,7 @@ All read methods on `Core.Process`:
 | `ReadMemoryArrayRequired<T>(addr, count)` | `T[]` | `count` contiguous structs; throws on failure. |
 | `ReadStdVector<T>(stdVector)` | `T[]` | A `std::vector<T>`. |
 | `ReadStdList<T>(stdList)` | `List<T>` | A `std::list<T>`. |
-| `ReadStdMap<TKey,TValue>(stdMap, maxSizeAllowed, enableCounting, onEach)` | `int` | Walks a `std::map`; calls `onEach(key, value)` per node (return `false` to skip a node). Returns total node count. |
+| `ReadStdMap<TKey,TValue>(stdMap, maxSizeAllowed, enableCounting, onEach)` | `int` | Walks a `std::map`; calls `onEach(key, value)` per non-null node. **The callback runs concurrently on worker threads — make it thread-safe.** Its return value is ignored (children are always visited), so skip a node by doing no work for it. `maxSizeAllowed` caps the total nodes visited; a map reporting a larger size is not walked. Returns the number of nodes visited (`enableCounting` is kept for compatibility). |
 | `ReadStdWString(stdWString)` | `string` | A `std::wstring` (UTF-16). |
 | `ReadUnicodeString(addr)` | `string` | Null-terminated UTF-16 string at a raw address. |
 
@@ -1985,7 +2040,7 @@ if (DatFileReader.TryGetDatTable("Data/Balance/EndgameMapBiomes.dat", out var ta
 }
 ```
 
-`DatTable` exposes `RowsBegin`/`RowsEnd`, `IsValid`, `ByteLength`, `RowCount(rowSize)`, `Row(index, rowSize)`. Row size and column offsets are table-specific — find them in `GameOffsets`. Returns `false` until the game is attached and the file is loaded.
+`DatTable` exposes `RowsBegin`/`RowsEnd`, `IsValid`, `ByteLength`, `RowCount(rowSize)`, `Row(index, rowSize)`. Row size and column offsets are table-specific and are not shipped in the SDK (its `GameOffsets` contains only `Natives`) — define them in your plugin and expect to update them when the game patches. Returns `false` until the game is attached and the file is loaded.
 
 Convenience readers:
 

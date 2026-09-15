@@ -694,4 +694,4 @@ private void LogItemName(Entity item)
 }
 ```
 
-For a table the host does not wrap with a convenience reader, resolve the row block yourself with `DatFileReader.TryGetDatTable(path, out var table)` and read each row by its `GameOffsets`-specific size and column offsets. See [API reference → Reading `.dat`/`.datc64` tables by name](api-overview.md#reading-datdatc64-tables-by-name).
+For a table the host does not wrap with a convenience reader, resolve the row block yourself with `DatFileReader.TryGetDatTable(path, out var table)` and read each row using a row size and column offsets you define in your plugin (the SDK's `GameOffsets` ships only `Natives`, no table layouts — expect to update them when the game patches). See [API reference → Reading `.dat`/`.datc64` tables by name](api-overview.md#reading-datdatc64-tables-by-name).

@@ -81,7 +81,7 @@ See [Distributing as a release ZIP](distributing-as-release.md) for the full set
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OriathHub.Sdk" Version="0.10.0" />
+    <PackageReference Include="OriathHub.Sdk" Version="0.18.0" />
   </ItemGroup>
 
   <PropertyGroup>
