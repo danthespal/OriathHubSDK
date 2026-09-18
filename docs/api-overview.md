@@ -105,6 +105,8 @@ To react once per zone change, subscribe to `RemoteEvents.AreaChanged` (raised s
 | `TgtTilesLocations` | `Dictionary<string, List<Vector2>>` | Grid positions of named map tiles (useful for detecting league-mechanic spawn tiles). |
 | `Rooms` | `List<AreaRoom>` | The rooms the area was generated from, read from its terrain graph. Each has the room asset `Name` (e.g. `Metadata/Terrain/Gallows/Act1/1_2/Rooms/Unique/campsite_02.arm`), its tile-space `MinTile`/`MaxTile` bounds, the same bounds in grid space as `MinGrid`/`MaxGrid`, and `ContainsGridPosition(Vector2)`. Use it to scope a position to a named room. Empty when the area exposes no graph. |
 | `WorldToGridConvertor` | `float` | Divide a world-space coordinate by this to obtain a grid coordinate. |
+| `TryGetAreaStat(statId, out int value)` | `bool` | Value of one modifier stat applied to the whole area (a map mod, a league mod). Binary search over the area's sorted stat block; reads on call, so cache the result if you need it every frame. |
+| `GetAreaStats()` | `IReadOnlyList<AreaStat>` | Every modifier stat on the area as `(Id, Value)` pairs, in the game's order. Reads the whole block — prefer `TryGetAreaStat` for a single stat. |
 
 ```csharp
 // Find the grid positions of a named tile that sit inside a particular room,
@@ -179,6 +181,8 @@ foreach (var entity in area.EntitiesRemovedThisFrame)
 | `IsHideout` | `bool` | True if the area is a hideout. |
 | `HasWaypoint` | `bool` | True if the area has a waypoint. |
 | `IsBattleRoyale` | `bool` | True if the area is an Exile Royale area. |
+| `VariantId32` | `int` | Wide numeric variant id on the row. League content uses it to tell variants of one area apart (e.g. a larger version of an encounter). |
+| `VariantId16` | `short` | Narrow numeric variant id on the row; see `VariantId32`. |
 
 ```csharp
 var details = world.AreaDetails;
@@ -301,6 +305,7 @@ if (entity.HasComponent("Life")) { /* present, whether or not it has been materi
 | `AvailableInventories` | `IReadOnlyCollection<InventoryName>` | Inventory names currently present on the player's server data. Stash tabs carry dynamic ids beyond the named `InventoryName` values and appear here as unnamed `InventoryName` casts. |
 | `GetInventory(name)` | `Inventory` | Returns a cached, self-updating wrapper for the given inventory. Safe to call every frame — the host keeps its address and items current (~5×/sec). When the inventory is not present the wrapper has a zero address and empty `Items`, filling in automatically once it appears. Pass any value from `AvailableInventories` (including stash-tab casts). |
 | `SanctumState` | `SanctumState` | The player's Sanctum resources (Sacred Water, honour lost, keys). Only populated while a lease from `ImportantUiElements.RequestSanctumData()` is held; refreshed ~5×/sec. See [Sanctum floor map](#sanctum-floor-map). |
+| `Expedition` | `ClientExpedition` | The Expedition league controller for the current area. See [Expedition](#expedition). |
 
 ```csharp
 // Price/inspect every loaded inventory, including open stash tabs.
@@ -345,6 +350,108 @@ for (var y = 0; y < flasks.TotalBoxes.Y; y++)
     }
 }
 ```
+
+---
+
+## Expedition
+
+`area.ServerDataObject.Expedition` (`ClientExpedition`) is the Expedition league controller. It is
+present only while the player is in an area running an Expedition encounter; everywhere else its
+address is zero, `IsAvailable` is `false` and its lists are empty. It refreshes with the rest of the
+server data (~5x/sec).
+
+| Member | Type | Description |
+|---|---|---|
+| `IsAvailable` | `bool` | `true` while the player is in an area that runs an Expedition encounter. |
+| `InstanceModifier` | `int` | Per-instance modifier the game feeds into its explosion radius formula. |
+| `TrackedEntities` | `IReadOnlyList<IntPtr>` | Addresses of everything the encounter tracks: markers, rune forges and detonators. Match them against the area's entities. |
+| `Chains` | `IReadOnlyList<ExpeditionChain>` | One chain per detonator, in the game's order. |
+| `Refresh()` | `void` | Re-reads the controller now. Explosives are placed faster than the server data refreshes, so call this when following a placement in progress. Call it from the render thread, like the rest of the host's updates. |
+| `ClientExpedition.TryGetRuneForge(entity, out RuneForgeState, out string failure)` | `static bool` | Reads a rune forge entity's selector. `failure` says what was missing when it returns `false`. |
+
+**`ExpeditionChain` properties:**
+
+| Member | Type | Description |
+|---|---|---|
+| `Origin` | `StdTuple2D<int>` | Grid point of the detonator the chain starts at. |
+| `MaxExplosives` | `int` | How many explosives the chain may hold in total. |
+| `PlacedPoints` | `IReadOnlyList<StdTuple2D<int>>` | Grid points of the explosives placed so far, in placement order. |
+
+**`RuneForgeState` properties:**
+
+| Member | Type | Description |
+|---|---|---|
+| `RuneSlotCount` | `int` | Number of rune slots the forge has. |
+| `LockedRuneSlotIndex` | `int` | Zero-based slot holding the pre-locked rune. |
+| `LockedRuneIndex` | `int` | Rune table index of the pre-locked rune. |
+| `LockedRuneName` | `string` | Display name of that rune; empty when it could not be named. |
+| `SelectedRecipeIndex` | `int` | Recipe table index the player picked, or `-1` while none is picked. |
+
+```csharp
+var expedition = area.ServerDataObject.Expedition;
+if (expedition.IsAvailable && expedition.Chains.Count > 0)
+{
+    expedition.Refresh();                      // following a placement in progress
+    var chain = expedition.Chains[0];
+    Log.Info($"{chain.PlacedPoints.Count}/{chain.MaxExplosives} placed from {chain.Origin}", Name);
+}
+```
+
+### Expedition recipes
+
+`ExpeditionRecipes` (namespace `OriathHub.RemoteObjects.FilesStructures`) parses the rune-forge tables
+and keeps the result for as long as the game holds them at the same address. It is cleared on area
+change, so read it through these members rather than caching rows yourself.
+
+| Member | Type | Description |
+|---|---|---|
+| `All` | `IReadOnlyList<ExpeditionRecipe>` | Every recipe, in table order. Empty when the table is not loaded in this area. |
+| `IsRuneTableLoaded` | `bool` | `false` when the rune table is not in this area's files - then no rune or recipe row resolves. |
+| `TryGetRuneIndex(rowAddress, out int)` | `bool` | Resolves a rune row address to its index. |
+| `TryGetRecipeIndex(rowAddress, out int)` | `bool` | Resolves a recipe row address to its index. |
+| `TryGetRuneName(runeIndex, out string)` | `bool` | Display name of a rune by index. |
+
+**`ExpeditionRecipe` properties:** `Index`, `RewardName`, `RewardPath`, `RewardArtPath`, `RewardCount`,
+`RuneCount`, `MinAreaLevel`, `MaxAreaLevel`, `RuneIndexes` (rune table indexes in slot order, `-1`
+where one did not resolve) and `RuneWeights`.
+
+**`ExpeditionRuneWeight` properties:** `SlotCount`, `RuneSlotIndex` (zero-based), `RuneIndex`,
+`MinAreaLevel` - the condition under which a recipe that uses fewer runes than the forge has slots is
+still offered.
+
+```csharp
+// Price the best reward a rune forge can still produce.
+if (ClientExpedition.TryGetRuneForge(entity, out var forge, out var failure))
+{
+    foreach (var recipe in ExpeditionRecipes.All)
+    {
+        if (recipe.RuneCount > forge.RuneSlotCount) continue;
+        if (forge.LockedRuneSlotIndex >= recipe.RuneIndexes.Count) continue;
+        if (recipe.RuneIndexes[forge.LockedRuneSlotIndex] != forge.LockedRuneIndex) continue;
+
+        var query = new PriceQuery { Path = recipe.RewardPath, ArtPath = recipe.RewardArtPath, StackCount = 1 };
+        if (Core.Prices.TryGetPrice(in query, Core.Prices.League, out var quote))
+            Log.Info($"{recipe.RewardCount}x {recipe.RewardName}: {quote.ExaltedValue * recipe.RewardCount:0.0} ex", Name);
+    }
+}
+else
+{
+    Log.Info($"not a rune forge: {failure}", Name);
+}
+```
+
+### Rune-forge reward panel
+
+`RuneshapeRewardPanel` (namespace `OriathHub.RemoteObjects.UiElement`) finds the scrolling reward list
+a rune forge opens. The panel sits at no fixed offset from the game UI, so the host walks down to it.
+
+| Member | Type | Description |
+|---|---|---|
+| `TryLocate(out IntPtr panel, out IntPtr viewport)` | `static bool` | The panel's children are the reward rows; `viewport` is the scroll area a row has to be clipped against. |
+| `TryReadRowLabel(rowAddress, out string label)` | `static bool` | The row's label, e.g. a reward name and its count. |
+
+Wrap the returned addresses in your own `UiElementBase` subclass (see
+[Custom remote objects](#custom-remote-objects)) to get each row's position, size and visibility.
 
 ---
 
@@ -702,6 +809,8 @@ Faction and alignment.
 |---|---|---|
 | `IsFriendly` | `bool` | `true` if the entity is on the player's side. |
 | `Flags` | `byte` | Raw reaction flags byte. |
+| `Rotation` | `float` | The entity's facing, in radians. Read from the game on access rather than refreshed for every entity — read it once per frame, not repeatedly. |
+| `ExplosionRadiusBonus` | `int` | Extra hit radius, in grid units, of an explosion centred on this entity; `0` for entities the game never blows up. Read on access, like `Rotation`. |
 
 ```csharp
 if (entity.TryGetComponent<Positioned>(out var pos) && !pos.IsFriendly)
@@ -1049,6 +1158,7 @@ Multi-state objects such as bosses and interactive objects.
 | Member | Type | Description |
 |---|---|---|
 | `States` | `IReadOnlyList<StateMachineState>` | All states in the machine. |
+| `GetListenerObjects(maxListeners = 64)` | `IReadOnlyList<IntPtr>` | Addresses of the objects listening to this machine — the scripted behaviours the game attaches to an entity, such as an encounter's own controller. Read on demand; returns empty when the machine reports more than `maxListeners`. You supply the layout of whatever object you expect there. |
 
 **`StateMachineState` properties:**
 
@@ -2040,11 +2150,20 @@ if (DatFileReader.TryGetDatTable("Data/Balance/EndgameMapBiomes.dat", out var ta
 }
 ```
 
-`DatTable` exposes `RowsBegin`/`RowsEnd`, `IsValid`, `ByteLength`, `RowCount(rowSize)`, `Row(index, rowSize)`. Row size and column offsets are table-specific and are not shipped in the SDK (its `GameOffsets` contains only `Natives`) — define them in your plugin and expect to update them when the game patches. Returns `false` until the game is attached and the file is loaded.
+`DatTable` exposes `RowsBegin`/`RowsEnd`, `IsValid`, `ByteLength`, `RowCount(rowSize)`, `Row(index, rowSize)` and `TryGetRowIndex(rowAddress, rowSize, out int)` (the inverse of `Row`, which also rejects an address belonging to another table). Row size and column offsets are table-specific and are not shipped in the SDK (its `GameOffsets` contains only `Natives`) — define them in your plugin and expect to update them when the game patches. Returns `false` until the game is attached and the file is loaded.
+
+When one table's column points at rows of another, two helpers save you the plumbing:
+
+- `DatFileReader.TryGetRowIndex(filePath, rowAddress, rowSize, out int index)` resolves a row address to its index in the named table, keeping the resolved table so repeated calls do not re-walk the File Root. It fails when the file is not loaded in the current area, which is worth reporting separately from an address that is simply not a row of that table.
+- `DatFileReader.ReadForeignRows(arrayAddress, count)` reads the row addresses out of a parsed foreign-row array - the layout such a column has in memory.
+
+The host clears both this cache and the parsed tables below on every area change.
 
 Convenience readers:
 
 - `BaseItemTypes.TryGet(metadataPath, out BaseItemType itemType)` resolves an entity/item metadata path to `MetadataPath`, localized `Name`, and normalized `ClassName`. The table is cached by the host and cleared when the game closes.
+- `BaseItemTypes.TryGetByRow(rowAddress, out BaseItemType itemType)` does the same for a row another table points at, and additionally fills `ArtPath` (the item's visual asset path, which tells visually distinct variants apart - `PriceQuery.ArtPath` wants it). `ArtPath` is empty on values that came from `TryGet`. It succeeds whenever the row names a metadata path; `Name` and `ClassName` come back empty when the cached table does not know that path, so you still get something priceable.
+- `ExpeditionRecipes` parses the Expedition rune-forge tables; see [Expedition recipes](#expedition-recipes).
 - `EndgameMapBiomes.TryGetNames(out IReadOnlyList<string> names)` returns biome display names indexed by biome id (the `AtlasMapsNodeUiElement.EndgameMapBiomeId`), cached.
 - `EndgameMapContent.TryGetNames(out IReadOnlyList<string> names)` returns map-content display names (Breach, Expedition, Powerful Map Boss, …) indexed by row id from `EndgameMapContent.dat`, cached. Use it to present a content picker or canonical names; per-node content is on `AtlasMapsNodeUiElement.Content`.
 - `AnimationDat.TryGetName(int animationId, out string name)` returns an animation name from the loaded `Animation.dat` table. Prefer `Actor.AnimationName` unless you already have a raw animation id.

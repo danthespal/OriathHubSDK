@@ -198,6 +198,20 @@ Use `RemoteEvents.AreaChanged` to reset per-area caches.
 
 Use `ReadMemory<T>` and `ReadMemoryArray<T>` in `DrawUI`, entity loops, coroutines, and other hot paths. Reserve required reads for one-shot startup checks where failure genuinely means an offset or layout is wrong.
 
+## Some members read memory when you touch them
+
+Most wrapper properties are filled in by the host's own update and are free to read. A few are not:
+they sit far from the fields their object refreshes, so reading them for every entity on every frame
+would cost the whole host. These read on access instead:
+
+- `Positioned.Rotation` and `Positioned.ExplosionRadiusBonus`
+- `StateMachine.GetListenerObjects(...)`
+- `AreaInstance.TryGetAreaStat(...)` and `AreaInstance.GetAreaStats()`
+- `ClientExpedition.Refresh()`
+
+Read them once and keep the value for the frame rather than calling them inside a loop over entities,
+and prefer `TryGetAreaStat` over `GetAreaStats` when you want one stat.
+
 ## Atlas map nodes require an opt-in lease
 
 `GameUi.AtlasMapsNodesUiElements` and `GameUi.AtlasMapConnections` are empty by default. The host skips the per-frame atlas node enumeration unless at least one plugin holds a lease.
